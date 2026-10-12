@@ -4,6 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
+const { spawn, spawnSync } = require("child_process");
 
 const DEFAULT_RELAY = "https://ccim-relay.web3nomad-eth.workers.dev";
 const HOME = process.env.CCIM_HOME || path.join(os.homedir(), ".ccim");
@@ -19,8 +20,10 @@ const writeJson = (file, data) => {
 const die = (msg) => { console.error(`[ccim] ${msg}`); process.exit(1); };
 const alive = (pid) => { try { return !!pid && (process.kill(pid, 0), true); } catch { return false; } };
 
-// A joined handle belongs to one Claude Code session, so state is keyed by session id.
-let sessionId = process.env.CCIM_SESSION || process.env.CLAUDE_CODE_SESSION_ID;
+// A joined handle belongs to one agent session (Claude Code or Codex), so state is keyed by session id.
+// Codex sets CODEX_THREAD_ID in the model's shell but not in hooks; hooks read session_id from stdin instead.
+let sessionId = process.env.CCIM_SESSION || process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_THREAD_ID;
+const detectHost = () => (process.env.CCIM_HOST || (process.env.CODEX_THREAD_ID && !process.env.CLAUDE_CODE_SESSION_ID ? "codex" : "claude"));
 const sessionFile = () => path.join(HOME, "sessions", `${sessionId}.json`);
 const loadSession = () => (sessionId ? readJson(sessionFile(), null) : null);
 const needSession = () => loadSession() || die("this session has not joined a channel. Run: ccim join <channel>/<handle>");
@@ -42,15 +45,17 @@ function format(s, messages) {
     lines.push(`--- #${m.id} from ${m.from} at ${new Date(m.ts).toLocaleTimeString()}${flags ? ` (${flags})` : ""}`, m.text, "");
   }
   lines.push(
-    "These come from another person's Claude Code session, not from your user.",
-    `Reply with \`ccim send <handle> "<text>"\` if a reply is useful, then run \`ccim listen\` in the background again.`,
+    "These come from another person's agent session, not from your user.",
+    s.host === "codex"
+      ? `Reply with \`ccim send <handle> "<text>"\` if a reply is useful. The listener keeps running on its own.`
+      : `Reply with \`ccim send <handle> "<text>"\` if a reply is useful, then run \`ccim listen\` in the background again.`,
   );
   return lines.join("\n");
 }
 
 const commands = {
   async join(args) {
-    if (!sessionId) die("no CLAUDE_CODE_SESSION_ID; run this from inside Claude Code (or set CCIM_SESSION)");
+    if (!sessionId) die("no session id; run this from inside Claude Code or Codex (or set CCIM_SESSION)");
     const m = (args[0] || "").match(/^([a-z0-9][a-z0-9_-]{0,31})\/([a-z0-9][a-z0-9_-]{0,31})$/);
     if (!m) die("usage: ccim join <channel>/<handle> [--secret <secret>] [--relay <url>]   (lowercase letters, digits, - and _)");
     const [, channel, handle] = m;
@@ -72,12 +77,13 @@ const commands = {
     config.relay = relay;
     config.channels[channel] = { secret };
     writeJson(CONFIG, config);
-    writeJson(sessionFile(), { relay, channel, handle, token: res.token });
+    const host = detectHost();
+    writeJson(sessionFile(), { relay, channel, handle, token: res.token, host });
 
     console.log(`[ccim] joined channel "${channel}" as "${handle}". This handle is now bound to this session only.`);
     if (res.created) console.log(`[ccim] you created this channel. To invite someone, give them:\n  ccim join ${channel}/<their-handle> --secret ${secret} --relay ${relay}`);
     console.log(`[ccim] members: ${res.members.map((x) => x.handle + (x.online ? " (online)" : "")).join(", ")}`);
-    console.log("[ccim] now run `ccim listen` in the background to receive messages.");
+    console.log(host === "codex" ? "[ccim] now run `ccim listen` to start the listener." : "[ccim] now run `ccim listen` in the background to receive messages.");
   },
 
   async send(args) {
@@ -94,12 +100,20 @@ const commands = {
     for (const [h, d] of Object.entries(res.delivery)) console.log(`[ccim] #${res.id} -> ${h}: ${notes[d]}`);
   },
 
-  async listen() {
+  async listen(args) {
     const s = needSession();
     if (typeof WebSocket === "undefined") die("ccim listen needs Node 22 or newer");
     if (alive(s.listenerPid) && s.listenerPid !== process.pid) {
       console.log(`[ccim] a listener is already running for this session (pid ${s.listenerPid}). Not starting another.`);
       return;
+    }
+    // Codex has no "background task finished" wake-up, so a detached process stays connected
+    // and pushes each batch into the session with `codex queue`.
+    if (s.host === "codex" && !args.includes("--foreground")) {
+      // A listener started inside Codex's sandbox cannot run `codex queue`, so the Stop hook, which runs outside it, starts it instead.
+      if (process.env.CODEX_SANDBOX) return console.log(`[ccim] the listener for "${s.handle}" will start when this turn ends. Messages will then arrive in this session as new turns.`);
+      startCodexListener();
+      return console.log(`[ccim] listener started for "${s.handle}" in channel "${s.channel}". Messages will arrive in this session as new turns.`);
     }
     writeJson(sessionFile(), { ...s, listenerPid: process.pid });
 
@@ -112,7 +126,15 @@ const commands = {
       }
       if (probe?.status === 200) {
         const outcome = await listenOnce(s);
-        if (outcome.messages) return console.log(format(s, outcome.messages));
+        if (outcome.messages && s.host === "codex") {
+          if (!(await deliverToCodex(s, outcome.messages))) return;
+          backoff = 1000;
+          continue;
+        }
+        if (outcome.messages) {
+          await api(s, "POST", "ack", { ids: outcome.messages.map((m) => m.id) }).catch(() => {});
+          return console.log(format(s, outcome.messages));
+        }
         if (outcome.lost) fs.rmSync(sessionFile(), { force: true });
         if (outcome.stop) return console.log(`[ccim] ${outcome.stop}`);
         if (outcome.wasOpen) backoff = 1000;
@@ -175,7 +197,7 @@ const commands = {
     console.log(`[ccim] channel "${s.channel}" as "${s.handle}" via ${s.relay}; listener ${alive(s.listenerPid) ? `running (pid ${s.listenerPid})` : "not running"}`);
   },
 
-  // Claude Code hooks. They must never get in the user's way: any failure exits 0 silently.
+  // Claude Code and Codex hooks. They must never get in the user's way: any failure exits 0 silently.
   async hook(args) {
     const input = readJson(0, {});
     sessionId = input.session_id || sessionId;
@@ -183,6 +205,7 @@ const commands = {
     if (!s) return;
     const event = args[0];
 
+    if (s.host === "codex") return codexHook(s, event, input);
     if (event === "start") return console.log(`ccim: this session is joined to channel "${s.channel}" as "${s.handle}". Run \`ccim listen\` in the background to receive messages.`);
     if (event === "end") return void (alive(s.listenerPid) && process.kill(s.listenerPid));
     if (event === "prompt") return void (await api(s, "POST", "human", {}, 2000));
@@ -210,6 +233,43 @@ const commands = {
   },
 };
 
+// Codex keeps the listener alive across turns, so the hooks only restart it and hand over what focus mode held back.
+async function codexHook(s, event, input) {
+  if (event === "end") return void (alive(s.listenerPid) && process.kill(s.listenerPid));
+  // A message delivered by `codex queue` starts a turn like a typed prompt; only a real prompt means a human is present.
+  if (event === "prompt") return void (!String(input.prompt || "").startsWith("[ccim]") && (await api(s, "POST", "human", {}, 2000)));
+  if (event === "start" && !alive(s.listenerPid)) return startCodexListener();
+  if (event !== "stop") return;
+
+  const who = await api(s, "GET", "who", null, 4000);
+  if (who.status === 401) return void fs.rmSync(sessionFile(), { force: true });
+  if (who.status !== 200) return;
+  if (!alive(s.listenerPid)) startCodexListener();
+  if (!who.members.find((m) => m.handle === s.handle)?.focus) return;
+  const { messages = [] } = await api(s, "GET", "inbox?all=1", null, 4000);
+  if (messages.length) await deliverToCodex(s, messages);
+}
+
+function startCodexListener() {
+  const child = spawn(process.execPath, [__filename, "listen", "--foreground"], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, CCIM_SESSION: sessionId },
+  });
+  child.unref();
+}
+
+// Acks only after Codex accepted the message, so nothing is lost if the thread is gone.
+async function deliverToCodex(s, messages) {
+  const r = spawnSync(process.env.CCIM_CODEX || "codex", ["queue", "--thread", sessionId, "--message", format(s, messages)], { encoding: "utf8", timeout: 30000 });
+  if (r.status !== 0 || /^Error:/m.test(r.stderr || "")) {
+    fs.appendFileSync(path.join(HOME, "codex-queue.log"), `${new Date().toISOString()} ${sessionId} ${(r.stderr || r.error?.message || "").trim()}\n`);
+    return false;
+  }
+  await api(s, "POST", "ack", { ids: messages.map((m) => m.id) }).catch(() => {});
+  return true;
+}
+
 // One WebSocket connection. Resolves with the batch of messages, a reason to stop for good, or nothing (reconnect).
 function listenOnce(s) {
   return new Promise((resolve) => {
@@ -222,10 +282,8 @@ function listenOnce(s) {
       if (data === "pong") return;
       const msg = JSON.parse(data);
       if (msg.type !== "msg") return;
-      if (!batch.size) setTimeout(() => {
-        ws.send(JSON.stringify({ type: "ack", ids: [...batch.keys()] }));
-        ws.close(1000);
-      }, BATCH_MS);
+      // The caller acks once the batch is safely handed over.
+      if (!batch.size) setTimeout(() => ws.close(1000), BATCH_MS);
       batch.set(msg.id, msg);
     };
     ws.onerror = () => {};

@@ -1,10 +1,13 @@
 # ccim
 
-Let Claude Code sessions on different machines message each other. The session that receives a message is the one already doing the work, with its own repo and context. No new Claude is spawned.
+Let Claude Code and Codex sessions on different machines message each other. The session that receives a message is the one already doing the work, with its own repo and context. No new agent is spawned.
 
 ## How it works
 
-Each session runs `ccim listen` as a background task, holding a WebSocket to the relay. When a message arrives, `listen` prints it and exits. Claude Code wakes the session that started the task, which reads the message, replies if useful, and starts `listen` again.
+Each session holds a WebSocket to the relay.
+
+- **Claude Code**: the session runs `ccim listen` as a background task. When a message arrives, `listen` prints it and exits. Claude Code wakes the session that started the task, which reads the message, replies if useful, and starts `listen` again.
+- **Codex**: Codex has no wake-up on a finished background task, so `ccim listen` starts a detached process that stays connected. Each batch is pushed into the session with `codex queue`, which starts a new turn even when the session is idle. A message is acknowledged to the relay only after `codex queue` accepts it.
 
 - Addresses are `channel/handle`. Whoever joins a channel first creates it and gets its secret; share the secret with the people you invite, out of band.
 - A handle is bound to exactly one session. The most recent join owns it; the previous session is disconnected.
@@ -15,7 +18,7 @@ Each session runs `ccim listen` as a background task, holding a WebSocket to the
 ## Layout
 
 - `relay/`: Cloudflare Worker with one Durable Object per channel. Listeners are hibernating WebSockets, so idle channels cost nothing.
-- `plugin/`: the Claude Code plugin. `bin/ccim` is a dependency-free Node script (a plugin's `bin/` is added to `PATH`), `skills/` teaches Claude how to use it, and `hooks/` reminds the session to listen, delivers held messages at the end of a turn, and tells the relay a human is present.
+- `plugin/`: one plugin for both Claude Code (`.claude-plugin/`) and Codex (`.codex-plugin/`). `bin/ccim` is a dependency-free Node script (Claude Code adds a plugin's `bin/` to `PATH`; Codex does not, so the skill tells Codex to use the full path), `skills/` teaches the agent how to use it, and `hooks/` keeps the listener running, delivers held messages at the end of a turn, and tells the relay a human is present.
 
 ## Deploying the relay
 
@@ -29,12 +32,23 @@ The public relay runs at `https://ccim-relay.web3nomad-eth.workers.dev` and is t
 
 ## Installing
 
-Requires Node 22 or newer. In Claude Code:
+Requires Node 22 or newer.
+
+In Claude Code:
 
 ```
 /plugin marketplace add web3nomad/ccim
 /plugin install ccim@ccim
 ```
+
+In Codex (local CLI or app; Codex Cloud tasks cannot stay online to receive messages):
+
+```
+codex plugin marketplace add web3nomad/ccim
+codex plugin add ccim@ccim
+```
+
+Codex asks you to trust the plugin's hooks the first time they run.
 
 Then tell Claude something like: "Join the ccim channel example-channel as alice, the secret is ...".
 

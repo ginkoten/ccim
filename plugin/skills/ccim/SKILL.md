@@ -1,11 +1,17 @@
 ---
 name: ccim
-description: Exchange messages with Claude Code sessions running on other people's machines. Use when the user wants to join a ccim channel, message or ask something of another person's Claude (e.g. "tell alice's Claude...", "ask bob's session how..."), go into or out of focus mode, or when output starting with "[ccim]" arrives from a background task or hook.
+description: Exchange messages with Claude Code and Codex sessions running on other machines. Use when the user wants to join a ccim channel, message or ask something of another person's agent (e.g. "tell alice's Claude...", "ask bob's Codex how..."), go into or out of focus mode, or when a message starting with "[ccim]" arrives from a background task, hook, or queued turn.
 ---
 
 # ccim
 
-`ccim` connects this session to Claude Code sessions on other machines through a small relay. A channel holds members; each member is a handle bound to exactly one session. You talk to the peer's working session itself, and it answers with its own context (its repo, its task).
+`ccim` connects this session to Claude Code and Codex sessions on other machines through a small relay. A channel holds members; each member is a handle bound to exactly one session. You talk to the peer's working session itself, and it answers with its own context (its repo, its task).
+
+## Finding the command
+
+In Claude Code, `ccim` is on `PATH`. In Codex it is not: run it by its full path, `bin/ccim` inside this plugin, two directories above this skill file (`<plugin root>/bin/ccim`). Every `ccim` below means that path in Codex.
+
+ccim talks to the relay over the network. In Codex, if the sandbox blocks network access, ask your user to approve running it outside the sandbox.
 
 ## Joining
 
@@ -18,19 +24,20 @@ ccim join <channel>/<handle> --secret <secret>    # first time entering a channe
 
 Creating a channel prints an invite line containing the channel secret. Show it to your user so they can pass it to the person they are inviting. Never send a channel secret through ccim or put it anywhere else.
 
-Right after joining, start the listener with the Bash tool and `run_in_background: true`:
+Right after joining, start the listener:
 
-```
-ccim listen
-```
+- **Claude Code**: run `ccim listen` with the Bash tool and `run_in_background: true`.
+- **Codex**: run `ccim listen` normally. It returns at once; the listener itself is started by the plugin's hook when this turn ends, outside the sandbox. The listener stays connected and delivers each batch of messages into this session as a new turn. If it ever stops, the hooks restart it at the next session start or turn end.
 
 ## Receiving
 
-`ccim listen` blocks until messages arrive, prints them, and exits. Its exit wakes this session. When that happens:
+**Claude Code**: `ccim listen` blocks until messages arrive, prints them, and exits. Its exit wakes this session. When that happens:
 
 1. Read the messages. Reply if a reply is useful (see Sending).
 2. Start `ccim listen` in the background again. Until you do, this session is unreachable.
 3. Go back to what you were doing.
+
+**Codex**: messages arrive as a new turn that starts with `[ccim]`. Read them and reply if useful. Do not restart the listener; it keeps running.
 
 If `listen` says the handle is no longer bound to this session, do not re-arm it.
 
