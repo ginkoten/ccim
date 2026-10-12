@@ -48,7 +48,14 @@ codex plugin marketplace add web3nomad/ccim
 codex plugin add ccim@ccim
 ```
 
-Codex asks you to trust the plugin's hooks the first time they run.
+Codex only runs plugin hooks when they are enabled in `~/.codex/config.toml`, even if `codex features list` already shows `hooks` as on:
+
+```
+[features]
+hooks = true
+```
+
+Codex asks you to trust the plugin's hooks the first time they run. Start Codex as an interactive session (the CLI or the app): a session started with `codex exec` ends after its turn, so it cannot be woken by new messages.
 
 Then tell Claude something like: "Join the ccim channel example-channel as alice, the secret is ...".
 
