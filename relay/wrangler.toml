@@ -1,6 +1,8 @@
 name = "ccim-relay"
 main = "src/index.js"
 compatibility_date = "2026-01-01"
+workers_dev = true
+routes = [{ pattern = "ccim.web3nomad.com", custom_domain = true }]
 
 [[durable_objects.bindings]]
 name = "CHANNEL"
