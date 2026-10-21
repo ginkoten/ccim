@@ -1,8 +1,9 @@
 "use strict";
-// Copy beside a reviewed local receiver wrapper; keep this helper path pointed at the checkout.
+// Install in a fixed receiver directory with a SHA-verified copy of scripts/macos-proxy.cjs
+// named ccim-macos-proxy.cjs. Maintain the repository source, not the runtime copy.
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { macosProxyEnv } = require("./macos-proxy.cjs");
+const { macosProxyEnv } = require("./ccim-macos-proxy.cjs");
 
 const event = process.argv[2];
 const input = fs.readFileSync(0, "utf8");

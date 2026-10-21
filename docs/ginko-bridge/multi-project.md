@@ -124,10 +124,20 @@ grok_send 必须带 "hop": 0（新消息）；承接消息提供 incoming hop �
 ## Codex 接收代理与原会话恢复
 
 仓库模板为 [ccim-local-hook.example.cjs](../../scripts/ccim-local-hook.example.cjs)，
-代理辅助模块为 [macos-proxy.cjs](../../scripts/macos-proxy.cjs)。在既有本地包装脚本中引用 helper，
+代理辅助模块的唯一维护源为 [macos-proxy.cjs](../../scripts/macos-proxy.cjs)。
+将已验证源码复制到开发 checkout 之外的固定接收目录，命名为 `ccim-macos-proxy.cjs`，
+与实际 `ccim-local-hook.cjs` 相邻。包装脚本只用 `require("./ccim-macos-proxy.cjs")`，
+不得引用开发 checkout 的绝对路径或指向它的软链接，避免切分支或移动仓库破坏启动。
 先备份，只替换启动子进程环境；不改全局 Codex 设置、系统代理、launchd 或权限。
 模板路径变量 `CCIM_PLUGIN_BIN` / `CCIM_CODEX` 和 `CCIM_RECEIVER_SESSION_ID` 由接收会话操作者设置；
 实际既有包装脚本可以继续保留自己的固定运行时与会话校验。
+
+运行副本不独立编辑。同步时先在仓库修改、验证并提交源码，再核对接收目录当前文件未被其他任务改动，
+备份既有运行副本和包装脚本，将源码复制到相邻临时文件；复制前后计算 SHA-256，
+确认源文件未变化且源/副本哈希一致后原子替换运行副本。首次安装不得覆盖已有未知文件。
+不改既有文件权限；记录源码 commit、源/副本路径和 SHA-256 于本机报告，不把个人路径写入仓库。
+仅更新 helper 时无需改包装脚本或全局设置。同步后做语法及隔离 fixture 检查，
+真实重启仍由原接收会话按下方步骤执行。更换开发分支不会自动更新运行副本；更新必须显式同步。
 
 每次有效 hook 启动时读取 `scutil --proxy` 中当前启用的 HTTP(S) 代理，设置
 `HTTP_PROXY`、`HTTPS_PROXY`、`NODE_USE_ENV_PROXY=1`、`NO_PROXY=localhost,127.0.0.1,::1`。
