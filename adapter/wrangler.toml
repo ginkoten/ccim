@@ -19,6 +19,9 @@ new_sqlite_classes = ["Adapter"]
 CCIM_RELAY = "https://relay.example.invalid"
 CCIM_CHANNEL = "ginko-bridge"
 CCIM_HANDLE = "grok"
+# Comma-separated members; empty/invalid-only lists fall back to workstation defaults.
+# Broadcast and the configured CCIM_HANDLE are always excluded.
+ALLOWED_RECIPIENTS = "claude,neo-codex"
 # Stable identity of this relay's data; do not change for an alias or redeploy.
 STATE_NAMESPACE = "example-relay/ginko-bridge/grok"
 RELAY_MODE = "direct"
