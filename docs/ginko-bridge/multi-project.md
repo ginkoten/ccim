@@ -123,6 +123,9 @@ grok_send 必须带 "hop": 0（新消息）；承接消息提供 incoming hop �
 
 ## Codex 接收代理与原会话恢复
 
+新项目的双客户端启动、只读预检与收件/exec 分工见 [项目接收端模板](project-receivers.md)。
+该准备流程与下面既有工作站原会话恢复分开，不覆盖工作站启动入口。
+
 仓库模板为 [ccim-local-hook.example.cjs](../../scripts/ccim-local-hook.example.cjs)，
 代理辅助模块的唯一维护源为 [macos-proxy.cjs](../../scripts/macos-proxy.cjs)。
 将已验证源码复制到开发 checkout 之外的固定接收目录，命名为 `ccim-macos-proxy.cjs`，
