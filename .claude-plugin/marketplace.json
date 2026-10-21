@@ -1,11 +1,13 @@
 {
   "name": "ccim",
-  "owner": { "name": "web3nomad" },
+  "owner": {
+    "name": "ginkoten"
+  },
   "plugins": [
     {
       "name": "ccim",
       "description": "Let this agent session exchange messages with Claude Code and Codex sessions on other machines.",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": "./plugin"
     }
   ]

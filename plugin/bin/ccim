@@ -6,7 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 
-const DEFAULT_RELAY = "https://ccim-relay.web3nomad-eth.workers.dev";
+const DEFAULT_RELAY = "";
 const HOME = process.env.CCIM_HOME || path.join(os.homedir(), ".ccim");
 const CONFIG = path.join(HOME, "config.json");
 // Wait this long after the first message so a burst wakes the session once, not once per message.
@@ -107,22 +107,24 @@ const commands = {
   async join(args) {
     if (!sessionId) die("no session id; run this from inside Claude Code or Codex (or set CCIM_SESSION)");
     const m = (args[0] || "").match(/^([a-z0-9][a-z0-9_-]{0,31})\/([a-z0-9][a-z0-9_-]{0,31})$/);
-    if (!m) die("usage: ccim join <channel>/<handle> [--secret <secret>] [--relay <url>]   (lowercase letters, digits, - and _)");
+    if (!m) die("usage: ccim join <channel>/<handle> [--secret-file <path>] [--relay <url>] [--if-absent] [--must-exist]   (lowercase letters, digits, - and _)");
     const [, channel, handle] = m;
     const flag = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 
     const config = { channels: {}, ...readJson(CONFIG, {}) };
     const relay = (flag("--relay") || process.env.CCIM_RELAY || config.relay || DEFAULT_RELAY).replace(/\/$/, "");
     if (!relay) die("no relay configured; pass --relay <url>");
-    const known = flag("--secret") || config.channels[channel]?.secret;
+    const secretFile = flag("--secret-file");
+    const known = (secretFile ? fs.readFileSync(secretFile, "utf8").trim() : flag("--secret")) || config.channels[channel]?.secret;
     const secret = known || crypto.randomBytes(24).toString("base64url");
 
     const old = loadSession();
-    stopListeners(old);
-
-    const res = await api({ relay, channel, secret }, "POST", "join", { handle });
-    if (res.status === 403) die(known ? `wrong secret for channel "${channel}"` : `channel "${channel}" already exists. Get its secret from whoever created it and pass --secret <secret>`);
+    const res = await api({ relay, channel, secret }, "POST", "join", {
+      handle, ifAbsent: args.includes("--if-absent"), mustExist: args.includes("--must-exist"),
+    });
+    if (res.status === 403) die(known ? `wrong secret for channel "${channel}"` : `channel "${channel}" already exists. Get its secret from whoever created it and use --secret-file <path> for join`);
     if (res.status !== 200) die(`join failed: ${res.error || res.status}`);
+    stopListeners(old);
 
     config.relay = relay;
     config.channels[channel] = { secret };
@@ -133,7 +135,7 @@ const commands = {
     const waking = host !== "codex" && ensureWaker(s, process.env.CLAUDE_CODE_MESSAGING_SOCKET, process.env.CLAUDE_CODE_MESSAGING_TOKEN);
 
     console.log(`[ccim] joined channel "${channel}" as "${handle}". This handle is now bound to this session only.`);
-    if (res.created) console.log(`[ccim] you created this channel. To invite someone, give them:\n  ccim join ${channel}/<their-handle> --secret ${secret} --relay ${relay}`);
+    if (res.created) console.log("[ccim] channel created; secret saved in private CCIM_HOME/config.json. Share it only through a secure credential channel.");
     console.log(`[ccim] members: ${res.members.map((x) => x.handle + (x.online ? " (online)" : "")).join(", ")}`);
     console.log(
       waking ? "[ccim] listening: new messages wake this session with a note to run `ccim inbox`. Nothing else to start."
@@ -281,8 +283,9 @@ const commands = {
     if (!channel || channel.startsWith("-")) die("usage: ccim delete <channel> [--secret <secret>]");
     const config = { channels: {}, ...readJson(CONFIG, {}) };
     const secret = (args.includes("--secret") && args[args.indexOf("--secret") + 1]) || config.channels[channel]?.secret;
-    if (!secret) die(`no secret for channel "${channel}" on this machine; pass --secret <secret>`);
+    if (!secret) die(`no secret for channel "${channel}" in private config; do not paste it into command arguments`);
     const relay = (process.env.CCIM_RELAY || config.relay || DEFAULT_RELAY).replace(/\/$/, "");
+    if (!relay) die("no relay configured; set CCIM_RELAY");
     const res = await api({ relay, channel, secret }, "POST", "delete");
     if (res.status === 404) die(`channel "${channel}" does not exist`);
     if (res.status === 403) die(`wrong secret for channel "${channel}"`);
