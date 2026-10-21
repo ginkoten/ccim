@@ -57,3 +57,22 @@
 - 历史 #8/#12 的原始500堆栈归因，以及 #43/#44 历史回报的重新验证。
 
 当前任务 chat 没有匹配的本地 ccim 身份记录，因此不冒用其他接收 chat 发送验收通知；由用户复制交付通知给 Grok。
+
+## Grok 复核后的补充（2026-10-21）
+
+Ginko 转达 Grok 对 `43dca17` 的复核：原130项测试、两个 dry-run 通过，
+gitleaks 全历史仅命中3处测试假值。这里记录为对方回报，不冒充本轮执行的 gitleaks 结果。
+
+本轮补齐：
+
+- `clients.md`：Claude 的环境代理/Node版本要求；Grok Webhook例程创建、字段取值、安全变量和MCP检查命令。
+- `rebuild.md`：客户端也要Node22+；workers.dev首次配置、部署URL位置、私密导出和cron观察步骤。
+- `scripts/check-adapter-mcp.mjs`：Bearer只从环境读取，四步只读诊断；不发送、ack或打印原始响应，失败不重试。
+- `scripts/export-channel-secret.mjs`：从CCIM_HOME导出选定频道secret为新0600文件，不回显、不覆盖文件或目标软链接。
+- `plugin/bin/ccim`：帮助改为--secret-file，delete实现同一私密文件参数；保留旧参数兼容但不再推荐。
+
+实际重新执行 adapter 69项 + 脚本12项 = **81项通过**。新增8项覆盖只读MCP兼容、错误/凭据不泄露、
+禁止不安全URL、secret导出权限/覆盖保护、CLI帮助与delete私密文件输入。
+relay源码与Worker配置未改；原57项和两个dry-run沿用上次证据，没有把未重跑项目计入本轮81项。
+本轮未安装、未部署、未调用真实adapter或例程。文档相对链接、diff检查和当前文件/历史凭据扫描通过；
+本机无gitleaks，未安装或声称再次执行。客户端产品步骤引用官方文档，真实新账号验收仍待完成。

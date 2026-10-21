@@ -28,19 +28,85 @@
 换账号不自动停止旧后台进程；不要把后台 shell 当作已验证交互会话。
 [官方插件说明](https://code.claude.com/docs/en/plugins)不保证每个版本有相同 inbox socket 能力。
 
-## Grok：先检查能力
+### Claude 的代理环境
 
-本次未操作新 Grok 账号界面，不提供未经验证的菜单路径。历史记录报告过现有账号
-可用安全变量和 webhook 例程，不能据此保证另一账号相同。先确认：
+客户端机器也需要 Node 22+；若使用 `NODE_USE_ENV_PROXY=1`，需 **Node 22.21+ 或24+**。
+它在 Node 启动时读取 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`；只设置 macOS/Windows
+系统代理不代表 Node 自动继承。按本机已经授权的代理设置导出 HTTP(S)_PROXY，
+不要复制别人机器的端口，不把带密码的代理 URL 写进 Git/聊天/命令历史。
+参见 [Node 官方说明](https://nodejs.org/api/cli.html#node_use_env_proxy1)。
 
-1. 例程可由 webhook 启动，提供 URL/key，并接收 JSON。
-2. 例程能从 secret store 注入 Bearer 调用 MCP；若连接器不支持，使用产品允许的
-   安全 HTTP/执行环境并实测 initialize/tools/list/tools/call，不把 secret 放提示词。
-3. 例程后台可运行，结果可供用户查看；真实唤醒一次与实际工具调用分别验收。
+从已配置代理变量的终端启动 Claude，使 ccim hooks 和 detached waker 继承同一环境：
+
+```sh
+node --version
+export NODE_USE_ENV_PROXY=1
+export NO_PROXY="localhost,127.0.0.1,::1${NO_PROXY:+,$NO_PROXY}"
+claude
+```
+
+无需代理的网络不要额外配置代理。改变量后，已经运行的 Claude/waker 不会自动获得新值；
+先在自己的接收会话按正常流程停止监听，再从新环境恢复，不能杀掉其他会话的监听。
+HTTP 成功不等于 WebSocket 监听成功；分别核对 `ccim who`、监听存活和无敏感收件。
+也不要用代理连通来推断此前的403一定来自 Cloudflare。
+
+## Grok：建立 Webhook 例程与安全变量
+
+以下入口按2026-10-21查阅的[官方例程文档](https://cursor.com/help/grok-bot/routines)整理；
+本轮没有操作真实账号。若账号缺少对应能力，停在该步骤并记录差异，不猜菜单或退化为明文密钥。
+
+1. 在准备接收消息的 Bot 对话中发送下面的配置请求（只含说明，不含密钥）：
+
+   ```text
+   请创建名为 Ginko-Bridge 接收的例程，添加 webhook 触发器。
+   指令使用本文“例程提示词模板”，收到 webhook 后按 message_ids 读取消息。
+   先给我确认例程指令和触发器；不要主动发消息、不要测试运行。
+   请提供例程详情入口，密钥只通过安全输入卡保存，禁止贴进聊天。
+   ```
+
+2. 确认后，在桌面端点聊天顶部 Bot 名称 → Details → Routines → 该例程。
+   核对指令、Webhook 触发器和启用状态；接入前不要点 Test。例程后台运行能力仍需本账号实测。
+3. 打开例程详情的 Webhook 区域，分别复制：
+   - `POST to` → adapter Worker secret `WEBHOOK_URL`。
+   - `key` → Worker secret `WEBHOOK_KEY`，只复制 key 值。
+   - `header` 是完整 `Authorization: Bearer …`，用于核对格式，**不要整行存成 WEBHOOK_KEY**。
+   点击字段即可复制，直接粘贴到 Wrangler 隐藏输入/密码管理器，不能经过聊天。
+4. 请 Bot 创建名为 **`CCIM_ADAPTER_MCP_BEARER`** 的安全输入卡：
+
+   ```text
+   请用安全输入卡保存 CCIM_ADAPTER_MCP_BEARER，供 Ginko-Bridge MCP 调用使用。
+   不读取或显示值，不写入代码、普通文件、命令参数或日志。
+   ```
+
+   在卡里自行粘贴与 Worker `MCP_BEARER` 相同的值并选择保存，确认显示已保存。
+   这是本项目约定的变量名，不是产品预置变量。
+   Team Bot 的管理者也可在 Bot 详情的 Secrets → Add secret 填同名变量。
+   [官方安全存储说明](https://cursor.com/help/grok-bot/secrets)区分 Bot secrets 与团队部署用 Team Secrets；不要混用。
+5. 配置非密钥变量 `CCIM_ADAPTER_MCP_URL` 为自己的 adapter HTTPS URL 加 `/mcp`。
+   让例程在其获准的执行环境中把已保存的 Bearer 注入同名环境变量，再运行下方脚本。
+   保存成功不保证任意 Shell 自动获得该变量；若报 missing_or_invalid_bearer，检查执行环境的 secret 映射，
+   不打印环境变量、不尝试让模型读回密钥，也不要重新粘贴到普通 Shell。
+
+### 从环境变量调用 MCP
+
+使用仓库的 [check-adapter-mcp.mjs](../../scripts/check-adapter-mcp.mjs)，无需额外依赖。
+它依次执行 initialize、initialized、tools/list、grok_status，只输出版本、五工具名称和轮询计数/时间。
+不会调用 inbox/ack/send/reply，不输出原始响应、消息正文或凭据；禁止重定向且失败不自动重试。
+
+在已安全注入 `CCIM_ADAPTER_MCP_BEARER` 的执行环境中，从仓库根目录运行：
+
+```sh
+# 替换成实际 adapter 地址；不要在此写 Bearer 值。
+export CCIM_ADAPTER_MCP_URL='https://adapter.example.invalid/mcp'
+node scripts/check-adapter-mcp.mjs
+```
+
+脚本只适配本项目的无状态 JSON MCP。例程是否能注入安全变量、真正启动和调用成功，
+按 [verify](verify.md)分别验收；官方文档中的200表示例程已启动，不表示业务处理完成。
 
 | Worker secret | Grok 侧映射 | 用途 |
 | --- | --- | --- |
-| `MCP_BEARER` | 示例安全变量 `CCIM_ADAPTER_MCP_BEARER` | adapter 请求 `Authorization: Bearer <secret>` |
+| `MCP_BEARER` | 安全变量 `CCIM_ADAPTER_MCP_BEARER` | adapter 请求 `Authorization: Bearer <secret>` |
 | `WEBHOOK_URL` | 例程生成的 URL | Worker 唤醒目的地，URL 也按 secret 保管 |
 | `WEBHOOK_KEY` | 例程验证 key | Worker 固定使用 `Authorization: Bearer <WEBHOOK_KEY>` header |
 | `CCIM_TOKEN` | 不交给 Grok | 仅 Worker 认证 relay grok 成员 |

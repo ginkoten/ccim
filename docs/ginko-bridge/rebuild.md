@@ -1,7 +1,9 @@
 # 重建 Ginko-Bridge
 
 从 `https://github.com/ginkoten/ccim` clone 完整历史；升级测试会读取历史提交。
-Node 22+、npm、Cloudflare 免费账号是前提，本地验证使用 Node 24。
+部署机器需要 Node 22+、npm 和 Cloudflare 免费账号；**每台运行 ccim 的 Codex/Claude 客户端机器也需要 Node 22+**，
+不能只在部署机器安装。运行 MCP 示例脚本的 Grok 执行环境也需 Node 22+。
+本地验证使用 Node 24；依赖环境代理时另见 [clients 的代理版本要求](clients.md#claude-的代理环境)。
 SQLite Durable Objects 支持免费计划但受额度限制，见[官方说明](https://developers.cloudflare.com/durable-objects/platform/pricing/)。
 本文是操作者步骤，本次仓库整理只做本地测试及 dry-run，不部署。
 
@@ -19,6 +21,17 @@ SQLite Durable Objects 支持免费计划但受额度限制，见[官方说明](
 
 不把真实值放聊天、Git、命令参数或日志。`.dev.vars.example` 只列占位值，
 真实 `.dev.vars` 仅用于本地且忽略。不要将测试凭据上传。
+
+## 0. 新 Cloudflare 账号先启用 workers.dev
+
+登录 Cloudflare，选择目标账号，打开 **Workers & Pages**，在账号的 **Your subdomain**
+区域完成首次设置；已有子域时这里是 **Change**。设置账号自己的 workers.dev 子域，
+后续 Worker 使用 `Worker名.账号子域.workers.dev`。若尚未显示子域，按账号 Workers
+首次启用引导完成设置；不要为此部署无关模板 Worker，也不需要购买域名。
+[官方 workers.dev 说明](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)。
+
+本项目两个配置均为 `workers_dev = true`。先确认子域已设置，再登录 Wrangler 和部署。
+一个账号的子域由其 Workers 共用，换子域可能影响已有地址，不要在已有服务的账号随意修改。
 
 ## 1. relay
 
@@ -41,7 +54,12 @@ npx wrangler deploy --config wrangler.local.toml --dry-run
 npx wrangler deploy --config wrangler.local.toml
 ```
 
-记录实际回执 URL 到私有配置。OAuth 默认关闭，relay `/mcp` tools/list 只暴露
+正式 deploy 成功后，从 Wrangler 输出的 `https://…workers.dev` 行取得 URL，
+也可在 Workers & Pages 中点开对应 Worker，在 **Settings → Domains & Routes** 查看 workers.dev 地址。
+不要复制预览版本地址；dry-run 不产生可访问 URL。将 relay URL 私密配置到 CCIM_RELAY，
+adapter 部署后同样取其 URL，在 Grok 使用该地址加 `/mcp`。
+
+OAuth 默认关闭，relay `/mcp` tools/list 只暴露
 `ccim_probe`；频道 API 不受影响。项目没有 relay `/status` 路由。
 
 ## 2. 插件、频道、两个本地成员
@@ -57,7 +75,21 @@ ccim listen
 
 此步生成频道 secret 和成员 token，保存到私有 `CCIM_HOME`，不回显。
 已存在频道/成员、凭据不匹配时停止，不能换名字绕过。
-通过密码管理器或私有文件将频道 secret 交给 Claude 所在机器，在其专用会话运行：
+### 不回显地导出频道 secret
+
+在已经创建频道的机器，从仓库根目录执行：
+
+```sh
+node scripts/export-channel-secret.mjs ginko-bridge "$HOME/.config/ginko-bridge/channel-secret"
+```
+
+脚本读取 `$CCIM_HOME/config.json`（未设置 CCIM_HOME 时为 `$HOME/.ccim/config.json`），
+只导出指定频道的 secret，不导出成员 token。目标新建为0600，父目录新建为0700，
+成功/失败均不输出值；已有目标文件或软链接会拒绝，不能覆盖。不要用 cat、echo、
+shell 命令替换或聊天中转。通过密码管理器或已授权的私密传输交给 Claude 所在机器，
+接收端也保存为0600文件；不能提交到仓库。完成交接后按自己的凭据备份策略处理临时文件。
+
+在 Claude 的专用会话运行：
 
 ```sh
 ccim join ginko-bridge/claude --if-absent --must-exist --secret-file /private/channel-secret
@@ -103,7 +135,29 @@ npx wrangler deploy --config wrangler.local.toml --dry-run
 npx wrangler deploy --config wrangler.local.toml
 ```
 
-## 4. Grok 与验收
+## 4. 确认 adapter 的 cron 在运行
+
+正式部署后，在 Workers & Pages → adapter Worker → Settings → Trigger Events，
+核对 cron 为 `* * * * *`。通过该区域 **View events** 查看 Cron Events 的定时调用记录；
+不要把一次 HTTP `/health` 成功当作 cron 已运行。触发配置传播最长可能15分钟，
+新建/改名 Worker 的历史事件显示最长可能30分钟。见[官方 Cron 文档](https://developers.cloudflare.com/workers/configuration/cron-triggers/)。
+
+用 [clients 的安全变量方式](clients.md#从环境变量调用-mcp)运行只读检查脚本两次，间隔至少一分钟：
+
+```sh
+node scripts/check-adapter-mcp.mjs
+# 至少一分钟后再执行，人工等待即可
+node scripts/check-adapter-mcp.mjs
+```
+
+看 `poll.at`（毫秒时间戳）是否前进、`poll.ok` 是否为 true。初始 poll=null 表示尚无该作用域的轮询记录；
+时间前进但 ok=false 表示 cron 运行了、relay 查询失败；wakes_today=0 可以只是没有需要唤醒的消息。
+若未更新，先核对查看的是正确 Worker/STATE_NAMESPACE 和触发配置，再看 Cron Events。
+有诊断授权时可在 adapter 目录用 `npx wrangler tail --config wrangler.local.toml`
+查看 scheduled 事件与 poll_failed；不要开启请求头/正文调试日志。此步骤不要求发测试消息，
+也不触发手工 tick、改 cron 或重新部署。
+
+## 5. Grok 与验收
 
 Grok 配置 adapter URL 加 `/mcp`，Bearer 是 `MCP_BEARER`，不是 relay token。
 按[clients](clients.md)映射变量/提示词，再按[verify](verify.md)做三对测试。
