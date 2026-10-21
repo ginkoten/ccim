@@ -280,9 +280,10 @@ const commands = {
 
   async delete(args) {
     const channel = args[0];
-    if (!channel || channel.startsWith("-")) die("usage: ccim delete <channel> [--secret <secret>]");
+    if (!channel || channel.startsWith("-")) die("usage: ccim delete <channel> [--secret-file <path>]");
     const config = { channels: {}, ...readJson(CONFIG, {}) };
-    const secret = (args.includes("--secret") && args[args.indexOf("--secret") + 1]) || config.channels[channel]?.secret;
+    const secretFile = args.includes("--secret-file") && args[args.indexOf("--secret-file") + 1];
+    const secret = (secretFile ? fs.readFileSync(secretFile, "utf8").trim() : (args.includes("--secret") && args[args.indexOf("--secret") + 1])) || config.channels[channel]?.secret;
     if (!secret) die(`no secret for channel "${channel}" in private config; do not paste it into command arguments`);
     const relay = (process.env.CCIM_RELAY || config.relay || DEFAULT_RELAY).replace(/\/$/, "");
     if (!relay) die("no relay configured; set CCIM_RELAY");
@@ -480,7 +481,7 @@ function socketAlive(socket) {
 
 const [cmd, ...args] = process.argv.slice(2);
 if (!commands[cmd]) {
-  console.log("usage: ccim <join|send|inbox|listen|who|focus|leave|delete|status>\n  join <channel>/<handle> [--secret s] [--relay url]\n  send <handle|*> [--urgent] \"<text>\"\n  inbox             print the messages waiting for this session and mark them read\n  listen            make sure this session receives messages (outside Claude Code and Codex: wait, print, exit)\n  who | focus on|off | leave | status\n  delete <channel> [--secret s]   delete the whole channel for everyone");
+  console.log("usage: ccim <join|send|inbox|listen|who|focus|leave|delete|status>\n  join <channel>/<handle> [--secret-file path] [--relay url]\n  send <handle|*> [--urgent] \"<text>\"\n  inbox             print the messages waiting for this session and mark them read\n  listen            make sure this session receives messages (outside Claude Code and Codex: wait, print, exit)\n  who | focus on|off | leave | status\n  delete <channel> [--secret-file path]   delete the whole channel for everyone");
   process.exit(cmd ? 1 : 0);
 }
 Promise.resolve(commands[cmd](args)).then(

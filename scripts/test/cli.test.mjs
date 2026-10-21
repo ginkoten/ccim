@@ -15,7 +15,7 @@ async function fixture(run) {
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
-    requests.push({ url: req.url, secret: req.headers["x-ccim-secret"], body: JSON.parse(body) });
+    requests.push({ url: req.url, secret: req.headers["x-ccim-secret"], body: body ? JSON.parse(body) : null });
     res.writeHead(status, { "content-type": "application/json" });
     res.end(JSON.stringify(status === 200 ? { token: "test-only-member-token", created: true, members: [] } : { error: "handle_taken" }));
   });
@@ -63,4 +63,23 @@ test("CLI environment relay overrides saved default; refused join preserves prio
   assert.equal(result.code, 1);
   assert.equal(requests.length, 1);
   assert.equal(fs.readFileSync(sessionPath, "utf8"), before);
+}));
+
+
+test("CLI help advertises private secret files for join and delete", () => fixture(async ({ command }) => {
+  const result = await command([]);
+  assert.equal(result.code, 0);
+  assert.equal((result.output.match(/--secret-file/g) || []).length, 2);
+  assert.doesNotMatch(result.output, /--secret\s/);
+}));
+
+test("CLI delete accepts a secret file without echoing it (isolated mock only)", () => fixture(async ({ home, relay, requests, command }) => {
+  const file = path.join(home, "channel-secret");
+  const secret = "test-only-delete-secret";
+  fs.writeFileSync(file, secret, { mode: 0o600 });
+  const result = await command(["delete", "example", "--secret-file", file], { CCIM_RELAY: relay });
+  assert.equal(result.code, 0);
+  assert.equal(requests[0].url, "/c/example/delete");
+  assert.equal(requests[0].secret, secret);
+  assert.ok(!result.output.includes(secret));
 }));
