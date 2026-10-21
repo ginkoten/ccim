@@ -89,7 +89,17 @@ node scripts/export-channel-secret.mjs ginko-bridge "$HOME/.config/ginko-bridge/
 shell 命令替换或聊天中转。通过密码管理器或已授权的私密传输交给 Claude 所在机器，
 接收端也保存为0600文件；不能提交到仓库。完成交接后按自己的凭据备份策略处理临时文件。
 
-在 Claude 的专用会话运行：
+### Claude 接入前必查：hook 的代理环境
+
+若该机需代理才能访问 relay，先完成 [Claude 的代理环境](clients.md#claude-的代理环境)：
+确认 hooks 能继承已授权的 `HTTP_PROXY` / `HTTPS_PROXY`，并在当前插件缓存的
+`SessionStart`、`UserPromptSubmit`、`Stop`、`SessionEnd` 四条 ccim 命令前加
+`NODE_USE_ENV_PROXY=1`。使用 Node 22.21+ 或24.5+；只改 ccim hook，不为此修改
+Claude 全局 `settings.json`。备份、JSON 示例及升级后复查步骤见链接。
+插件更新或重装会覆盖本地缓存的可能性不能忽略，更新后必须重新检查。
+无需代理的网络跳过代理修正，仍需验收监听在线。
+
+首次在尚未绑定成员的 Claude 专用会话运行：
 
 ```sh
 ccim join ginko-bridge/claude --if-absent --must-exist --secret-file /private/channel-secret
@@ -97,6 +107,10 @@ ccim join ginko-bridge/claude --if-absent --must-exist --secret-file /private/ch
 
 `/private/channel-secret` 是示例，替换为该机 0600 文件。成员 token 由 join 生成，
 不是安装前提。未带 `--if-absent` 的 join 仍会接管同名身份，不可误用。
+需要代理时，上述手动 join 命令也加 `NODE_USE_ENV_PROXY=1` 前缀。
+重启会话后运行 `NODE_USE_ENV_PROXY=1 ccim who`（无需代理时直接 `ccim who`），
+确认自己的成员 `online`，再按 [verify](verify.md) 验收获准的无敏感收件。
+已加入的成员修正代理后只恢复原监听，不重复 join。手动 who/inbox/send 正常不代表 hook 已继承代理。
 
 ## 3. grok 成员与 adapter
 

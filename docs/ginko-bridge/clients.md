@@ -30,25 +30,71 @@
 
 ### Claude 的代理环境
 
-客户端机器也需要 Node 22+；若使用 `NODE_USE_ENV_PROXY=1`，需 **Node 22.21+ 或24+**。
+客户端机器也需要 Node 22+；本节代理接入使用 **Node 22.21+ 或24.5+**，覆盖 fetch 与 HTTP(S) 请求的环境代理支持。
 它在 Node 启动时读取 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`；只设置 macOS/Windows
 系统代理不代表 Node 自动继承。按本机已经授权的代理设置导出 HTTP(S)_PROXY，
 不要复制别人机器的端口，不把带密码的代理 URL 写进 Git/聊天/命令历史。
-参见 [Node 官方说明](https://nodejs.org/api/cli.html#node_use_env_proxy1)。
+参见 [Node 官方网络配置说明](https://nodejs.org/en/learn/http/enterprise-network-configuration)。
 
-从已配置代理变量的终端启动 Claude，使 ccim hooks 和 detached waker 继承同一环境：
+**依赖代理访问 relay 时，下面的 hook 环境检查是 Claude 接入的必做步骤。**
+终端里手动执行 ccim 成功，不代表 hook 拉起的监听也带着代理设置。
+从已配置 `HTTP_PROXY`、`HTTPS_PROXY` 的环境启动 Claude，让 hooks 继承代理地址；
+例如地址占位为 `http://<proxy-host>:<proxy-port>`，必须换成本机已授权、实际可用的配置。
+`NO_PROXY` 应保留本地 socket/loopback 通信所需的主机，并确认没有把 relay 域名排除代理。
+无需代理的网络跳过此修正。
+
+#### 只为 ccim hook 启用代理
+
+以下适用于 macOS/Linux 的 POSIX shell；其他平台需使用对应 shell 的环境变量赋值语法。
+不要为此向 Claude 的 `settings.json` 添加全局代理设置，也不必给整个 Claude 进程
+全局设置 `NODE_USE_ENV_PROXY`。这里只控制 ccim 子进程，Claude 自身如何使用已有代理变量
+仍由其产品配置决定。
+
+1. 找到当前实际加载的插件版本，而不是照抄旧版本号。缓存路径示例：
+   `~/.claude/plugins/cache/ccim/ccim/<installed-version>/hooks/hooks.json`。
+   若插件安装位置不同，以当前安装记录为准。先备份该文件，并在本机记录修改前后的 SHA-256；
+   不把缓存、备份或机器配置提交到仓库。
+2. 在 `SessionStart`、`UserPromptSubmit`、`Stop`、`SessionEnd` 四条 ccim hook 命令前
+   各加一次 `NODE_USE_ENV_PROXY=1 `。按事件名定位，不依赖行号；保留原有 timeout、其他 hook
+   和所有其他字段。四条 `command` 分别应为：
+
+   | 事件 | JSON 中的 command 值（含 JSON 转义） |
+   | --- | --- |
+   | SessionStart | `"NODE_USE_ENV_PROXY=1 \"${CLAUDE_PLUGIN_ROOT}/bin/ccim\" hook start"` |
+   | UserPromptSubmit | `"NODE_USE_ENV_PROXY=1 \"${CLAUDE_PLUGIN_ROOT}/bin/ccim\" hook prompt"` |
+   | Stop | `"NODE_USE_ENV_PROXY=1 \"${CLAUDE_PLUGIN_ROOT}/bin/ccim\" hook stop"` |
+   | SessionEnd | `"NODE_USE_ENV_PROXY=1 \"${CLAUDE_PLUGIN_ROOT}/bin/ccim\" hook end"` |
+
+   例如 `SessionStart` 中的单条 hook 对象：
+
+   ```json
+   { "type": "command", "command": "NODE_USE_ENV_PROXY=1 \"${CLAUDE_PLUGIN_ROOT}/bin/ccim\" hook start", "timeout": 5 }
+   ```
+
+3. 检查 JSON 可解析，diff 仅有这四处前缀变化。无需读取或修改频道 secret、成员 token；
+   不打印完整环境或凭据配置。插件启动 waker/listener 时会继承 `process.env`，所以前缀也会
+   传给它启动的后台进程。现有进程不会自动更新环境。
+4. 在自己的专用接收会话按正常流程停止旧监听，重启会话并确认 hooks 载入/信任、监听恢复。
+   已绑定的成员不要重新 join，也不能停止其他会话的监听。使用同一代理环境执行：
 
 ```sh
 node --version
-export NODE_USE_ENV_PROXY=1
-export NO_PROXY="localhost,127.0.0.1,::1${NO_PROXY:+,$NO_PROXY}"
-claude
+NODE_USE_ENV_PROXY=1 ccim who
 ```
 
-无需代理的网络不要额外配置代理。改变量后，已经运行的 Claude/waker 不会自动获得新值；
-先在自己的接收会话按正常流程停止监听，再从新环境恢复，不能杀掉其他会话的监听。
-HTTP 成功不等于 WebSocket 监听成功；分别核对 `ccim who`、监听存活和无敏感收件。
-也不要用代理连通来推断此前的403一定来自 Cloudflare。
+确认自己的成员显示 `online`，再按 [verify](verify.md) 在获准后验证无敏感收件。
+HTTP 成功不等于 WebSocket 监听成功；online 也不等于消息已处理。
+首次加入尚未绑定的成员时，手动 join 命令同样需前缀 `NODE_USE_ENV_PROXY=1`，
+并保留 `--if-absent --must-exist --secret-file`，具体见 [rebuild](rebuild.md#2-插件频道两个本地成员)。
+
+**插件升级或重装可能覆盖缓存修正。** 每次升级后检查新版本目录中的四条命令，缺少时重新加前缀，
+再重启会话、验证 online；不要把旧 hooks.json 整份覆盖到新版本。仓库的通用 hooks.json
+没有因此变成强制走代理，本节是本地代理环境的接入操作。
+
+2026-10-21 操作者报告：其网络中 workers.dev 的直连 DNS/连接异常，hook 未启用环境代理
+导致离线/消息积压；按上述方式修正后报告 `claude online`。这是恢复回报，不是所有网络的通用根因。
+同次 502 排查的 tail 窗口未捕获 join，只见 who/inbox/ack 的200且无异常，因此记为
+**“502 未复现；未取得对应 join 的服务端证据”**。不据此认定代理、DNS 或 Cloudflare 是该502的已证实来源。
 
 ## Grok：建立 Webhook 例程与安全变量
 
