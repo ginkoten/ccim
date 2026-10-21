@@ -177,3 +177,24 @@ adapter 占位配置 dry-run 通过（43.77 KiB / gzip 12.80 KiB），未上传�
 正式 adapter 部署、cron、间隔至少一分钟的两次 MCP 检查、poll.at 推进及真实消息隔离验收均未完成。
 当前接口提供 poll.at 时间戳，没有累计 poll 计数；不能把 wakes_today 作为轮询次数。
 本执行会话未发送桥回报，统一由父接收会话交付；本机无秘密的执行报告保存在忽略的 artifacts 中。
+
+### MCP 先上线、Webhook 后补（2026-10-21）
+
+Ginko 补充授权：先取得真实 MCP 地址供 GinkoAI 创建例程，暂不设置 WEBHOOK_URL / WEBHOOK_KEY。
+本轮已正式部署 GinkoAI adapter，复用原 MCP_BEARER；未写占位 Webhook、伪造 token 或接管接收身份。
+工作站 adapter 和 relay 线上部署不变。部署版本 `6970c205-7700-48f9-bae1-62a43e1ade65`，
+打包 44.56 KiB / gzip 13.01 KiB；部署输出确认每分钟 cron，版本元数据确认 Durable Object 绑定。
+线上 secret 清单仅有 MCP_BEARER。实际 Worker/MCP 地址仅记录于本机忽略报告，不写入 Git。
+
+缺 Webhook 的现有保护在 fetch 前返回 webhook_not_configured；三种缺项 fixture 均为零请求，
+无需代码修复。另运行鉴权、工具发现和路由三个相关测试，3/3 通过；其余既有证据复用。
+
+两次真实 initialize / notifications/initialized / tools/list / grok_status 检查通过，
+第二次开始距第一次完成 83.136 秒。健康端点200，无Bearer及错误Bearer均401，外部tick路径404。
+五工具完整，身份配置为 ginkoai/grok，主动发送白名单 codex/claude，方案乙 hop 必填、无 maximum，
+额度字段均为 null；open=0、wakes_today=0。
+
+两次 poll 均为 null：调度配置已部署，但尚无实际tick记录，不能宣称cron执行或poll推进通过。
+CCIM_TOKEN 尚未提供，因而有效relay轮询不可用；缺项尚包括真实接收会话首次加入和grok provision。
+待GinkoAI例程生成后补 WEBHOOK_URL、WEBHOOK_KEY；再补成员令牌并完成唤醒、双向消息和频道隔离验收。
+未重试之前网络失败的Git push，远端未合并事实不变；父会话负责最终桥回报。
