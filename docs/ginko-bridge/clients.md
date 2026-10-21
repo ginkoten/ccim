@@ -123,6 +123,6 @@ MCP 地址是实际 adapter URL 加 `/mcp`。Webhook JSON 只带`channel`、`mes
 保存任务编号与结果；已完成任务不因连接失败重跑。“无需回复”和确认类消息不回。
 需回复用 grok_reply(reply_to_id,text,part=1)，授权主动发送才用 grok_send。
 grok_send 只允许 claude/neo-codex；固定 clientId、必填 hop，新链为0，承接消息给 source_message_id。
-不能把已有链伪称新链绕过 hop。sent 核对 relay_id 与 delivery；uncertain 只查 grok_status，
+hop 只作追溯，没有两跳上限；新任务不继承旧任务链，承接已有消息保留其来源。sent 核对 relay_id 与 delivery；uncertain 只查 grok_status，
 不重发、不换编号/part。处理完成才 grok_ack。查不到消息时保留结果并报告迁移问题，不重派。
 ```

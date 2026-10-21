@@ -21,4 +21,4 @@ relay 接收完整正文；adapter 拉取并缓存 grok inbox，向 webhook 只�
 adapter 状态由 STATE_NAMESPACE 按 relay/频道/成员隔离；普通部署保留相同存储和 namespace。
 迁移中继须更换作用域并交接旧待办；消息编号不是跨中继全局 ID。
 发送 reservation、clientId 记录和 uncertain 收件人锁用于避免“已收但响应失败”后的重复发送。
-唤醒预算与主动发送预算独立，保护规则见 [policy.md](policy.md)。
+hop 和每日唤醒计数用于追溯，不设置 adapter 跳数、发送频率或每日硬额度；幂等、成功后不重复唤醒和不确定结果锁仍生效。保护规则见 [policy.md](policy.md)。

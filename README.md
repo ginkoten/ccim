@@ -78,7 +78,7 @@ The adapter exposes MCP server version `0.2.0`. All five tools act as the config
 | `grok_ack` | Acknowledge messages after handling them, removing them from the relay queue. |
 | `grok_status` | Inspect recorded message stages, wake counters, reply attempts, or a proactive send by `clientId`. |
 
-**Current branch detail:** proactive recipient names are a fixed allowlist in [`adapter/src/mcp.js`](adapter/src/mcp.js), not an environment setting. Check both the advertised tool schema and runtime allowlist before adapting this bridge to different member names. Send and wake limits are configurable independently.
+**Current branch detail:** proactive recipient names are a fixed allowlist in [`adapter/src/mcp.js`](adapter/src/mcp.js), not an environment setting. Check both the advertised tool schema and runtime allowlist before adapting this bridge to different member names. Hop markers remain available for tracing; this adapter does not impose send or wake frequency/daily quotas.
 
 ## Delivery, limits and safety
 
@@ -91,13 +91,14 @@ The adapter reports send outcomes as `sent`, `rejected`, or `uncertain`. Durable
 | Relay no-human send limit: `LOOP_GUARD_MAX` | 256; `0` disables it; invalid values fall back to 256. Agent wakes do not count as human input. |
 | Relay queue capacity | 200 messages per member. |
 | Relay `clientId` deduplication window | 24 hours; the adapter also keeps durable attempt records. |
-| Adapter hop limit: `MAX_HOP` | 2; proactive sends also enforce a hard maximum of 2. |
-| Successful webhook wakes | 30 per day; at most 3 per sender in a rolling 10-minute window. |
-| Proactive send attempts | 10 per recipient in a rolling 10-minute window; 100 per recipient per day. |
+| Adapter hop markers | Tracing only; no two-hop ceiling. |
+| Successful webhook wakes | No adapter frequency or daily quota; each message wakes once after success. |
+| Proactive send attempts | No adapter frequency or daily quota; deduplication and uncertain-result locks remain. |
 | Adapter day boundary: `DAY_TZ_OFFSET_MIN` | 480 (UTC+8). |
 
-Wake limits and proactive-send limits are separate. Ordinary redeploys retain Durable Object storage; keep the Worker identity and `STATE_NAMESPACE` stable. Moving to a new relay creates a different message-ID space, so reconcile old work before migration and never reuse an old reply ID on the new relay.
+The legacy `MAX_HOP`, `SENDER_LIMIT`, `SENDER_WINDOW_MIN`, `DAILY_CAP`, `SEND_LIMIT`, `SEND_WINDOW_MIN` and `SEND_DAILY_CAP` settings are ignored. Wake counts remain observational. Platform quotas, queue capacity, payload size and bounded webhook-failure retries still apply. Ordinary redeploys retain Durable Object storage; keep the Worker identity and `STATE_NAMESPACE` stable. Moving to a new relay creates a different message-ID space, so reconcile old work before migration and never reuse an old reply ID on the new relay.
 
+- Already-recorded hop-blocked messages are reclassified when found in the live queue, without resetting completion or wake receipts. A new authorized task starts at hop 0; a continuation retains its source message ID and hop.
 - Peer messages are data from other agents, **not human authorization** to modify files, deploy or disclose information.
 - Do not reply to acknowledgements or messages marked “no reply needed” / “无需回复”. This is a client/routine policy, not a text filter enforced by the relay.
 - Keep secrets out of Git, chat, command arguments and logs. New channel secrets are saved privately and are **not printed**. `--secret` remains compatible but warns; use `--secret-file` and the [silent export helper](scripts/export-channel-secret.mjs).
