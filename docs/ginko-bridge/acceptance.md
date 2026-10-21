@@ -93,3 +93,11 @@ adapter 占位配置 dry-run 通过（43.77 KiB / gzip 12.80 KiB），未上传�
 （同批另有 #69），不是以“队列为空”代替接收证据；未补发消息或重新加入频道。
 直接网络探测超时，采用系统现有代理的进程可取得 HTTP 响应；旧监听退出原因仍未证实。
 恢复接收不代表新的 adapter 代码已上线。生产部署与真实 Grok 高 hop 调用验收另行记录。
+
+### 生产部署确认（2026-10-21）
+
+用户确认后，已将 `391b82e` 的 adapter 源码部署至既有 Worker，保持 Worker 身份、Durable Object 与 STATE_NAMESPACE。没有修改密钥、创建成员或发送测试消息。
+
+只读验收：五个 MCP 工具可发现；grok_send 的 hop schema 不再包含 maximum；grok_status 的 hop_limit、sender_limit、daily_cap、send_limit、send_daily_cap 均为 null；无 Bearer 请求仍返回401。部署后的 cron 已成功轮询。部署前后最近20条消息的阶段/回复记录一致，既有每日唤醒计数未重置。
+
+`/health` 返回200；项目没有 `/status` 路由，仍返回404及 not_found，业务状态通过 MCP grok_status 查询。上述结果证明版本生效与状态连续性，不冒充真实 Grok 高 hop 发送的端到端验收。
