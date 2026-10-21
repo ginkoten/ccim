@@ -26,7 +26,7 @@ test("allowlist and arguments fail closed without network calls", async () => {
   const invalid = [
     { to: "*" }, { to: "grok" }, { to: "someone" }, { to: "CLAUDE" },
     { clientId: "x" }, { clientId: "x".repeat(65) }, { text: " " }, { text: "x".repeat(16384) },
-    { hop: -1 }, { hop: 2 }, { hop: 1.5 }, { hop: undefined }, { urgent: true },
+    { hop: -1 }, { hop: Number.MAX_SAFE_INTEGER }, { hop: 1.5 }, { hop: undefined }, { urgent: true },
     { source_message_id: 0 }, { source_message_id: 999 },
   ];
   for (const bad of invalid) {
@@ -37,16 +37,18 @@ test("allowlist and arguments fail closed without network calls", async () => {
   assert.equal(posts(h), 0);
 });
 
-test("source metadata and embedded hop markers cannot be lowered by the caller", async () => {
-  const h = harness({ MAX_HOP: "9" });
-  const id = h.relay.deliver("neo-codex", "grok", "stop [hop:2]");
-  assert.equal((await send(h, args(1, { source_message_id: id, hop: 0 }))).reason, "hop_limit");
-  assert.equal((await send(h, args(2, { text: "stop [ccim-auto from=claude hop=2]" }))).reason, "hop_limit");
-  const id1 = h.relay.deliver("neo-codex", "grok", "continue [hop:1]");
-  const r = await send(h, args(3, { source_message_id: id1 }));
-  assert.equal(r.hop, 2);
-  assert.match([...h.relay.queues.get("claude").values()][0].text, new RegExp(`hop=2 re=#${id1}`));
-  assert.equal(posts(h), 1);
+test("high hops preserve source provenance without a quota; new messages start their own chain", async () => {
+  const h = harness({ MAX_HOP: "2" });
+  const id = h.relay.deliver("neo-codex", "grok", "continue [hop:128]");
+  const first = await send(h, args(1, { source_message_id: id, hop: 0 }));
+  assert.equal(first.hop, 129);
+  assert.equal(first.outcome, "sent");
+  assert.match([...h.relay.queues.get("claude").values()][0].text, new RegExp(`hop=129 re=#${id}`));
+  const embedded = await send(h, args(2, { text: "continue [ccim-auto from=claude hop=32]" }));
+  assert.equal(embedded.hop, 33);
+  assert.equal((await send(h, args(3, { hop: 256 }))).hop, 257);
+  assert.equal((await send(h, args(4))).hop, 1, "new task does not inherit previous chain");
+  assert.equal(posts(h), 4);
 });
 
 test("same clientId is durable and payload changes or recipient changes are rejected", async () => {
@@ -65,44 +67,25 @@ test("same clientId is durable and payload changes or recipient changes are reje
   assert.equal(posts(h), 1);
 });
 
-test("rolling and daily budgets are independent per recipient and separate from wake budgets", async () => {
-  const h = harness({ SEND_LIMIT: "3", SEND_DAILY_CAP: "4", DAILY_CAP: "0", SENDER_LIMIT: "0" });
-  for (let n = 1; n <= 3; n++) assert.equal((await send(h, args(n))).outcome, "sent");
-  assert.equal((await send(h, args(4))).reason, "recipient_window_limit");
-  assert.equal((await send(h, args(5, { to: "neo-codex" }))).outcome, "sent");
-  h.advance(10);
-  assert.equal((await send(h, args(4))).outcome, "sent");
-  assert.equal((await send(h, args(6))).reason, "recipient_daily_limit");
-  h.clock.t = Date.UTC(2026, 9, 20, 16, 0, 0); // Next day in UTC+8.
-  assert.equal((await send(h, args(6))).outcome, "sent");
-  assert.equal(posts(h), 6);
+test("old environment quotas and persisted counters do not block sends", async () => {
+  const h = harness({ SEND_LIMIT: "1", SEND_DAILY_CAP: "1", SEND_WINDOW_MIN: "10" });
+  await h.storage.put("rate:send:claude", { recent: [h.clock.t], day: "2026-10-20", count: 999 });
+  for (let n = 1; n <= 110; n++) assert.equal((await send(h, args(n))).outcome, "sent");
+  assert.equal(posts(h), 110);
+  assert.equal((await send(h, args(110))).duplicate, true);
+  assert.equal(posts(h), 110);
 });
 
-test("configured send caps apply and zero disables proactive sends", async () => {
-  const h = harness({ SEND_LIMIT: "1", SEND_WINDOW_MIN: "2" });
+test("zero legacy quotas cannot disable proactive sends", async () => {
+  const h = harness({ SEND_LIMIT: "0", SEND_DAILY_CAP: "0" });
   assert.equal((await send(h, args())).outcome, "sent");
-  h.advance(1);
-  assert.equal((await send(h, args(2))).reason, "recipient_window_limit");
-  h.advance(1);
-  assert.equal((await send(h, args(2))).outcome, "sent");
-  assert.equal((await send(harness({ SEND_LIMIT: "0" }), args())).reason, "recipient_window_limit");
-  assert.equal((await send(harness({ SEND_DAILY_CAP: "0" }), args())).reason, "recipient_daily_limit");
 });
 
-test("default proactive budget is 10 per 10 minutes and 100 per day per recipient", async () => {
-  const h = harness();
-  for (let n = 1; n <= 10; n++) assert.equal((await send(h, args(n))).outcome, "sent");
-  assert.equal((await send(h, args(11))).reason, "recipient_window_limit");
-  h.advance(10);
-  assert.equal((await send(h, args(11))).outcome, "sent");
-  for (let n = 12; n <= 100; n++) {
-    if (n % 10 === 1) h.advance(10);
-    assert.equal((await send(h, args(n))).outcome, "sent");
-  }
-  h.advance(10);
-  const dayRate = await h.storage.get("rate:send:claude");
-  assert.equal(dayRate.count, 100);
-  assert.equal((await send(h, args(101))).reason, "recipient_daily_limit");
+test("send tool advertises nonnegative tracing hops without a policy maximum", async () => {
+  const { TOOLS } = await import("../src/mcp.js");
+  const hop = TOOLS.find(t => t.name === "grok_send").inputSchema.properties.hop;
+  assert.equal(hop.minimum, 0);
+  assert.equal(hop.maximum, undefined);
 });
 
 test("concurrent same-clientId calls issue exactly one POST", async () => {
@@ -153,14 +136,14 @@ test("lost relay response stays uncertain across restart and cannot be retried w
   assert.ok(!JSON.stringify(h.logs).includes(TOKEN));
 });
 
-test("known relay rejection is cached and still consumes an attempt", async () => {
+test("known relay rejection is cached without an unrelated quota", async () => {
   const h = harness({ SEND_LIMIT: "1" });
   h.adapter.deps.fetch = async () => new Response(JSON.stringify({ error: "unknown_handle" }), { status: 404 });
   const first = await send(h, args());
   assert.equal(first.outcome, "rejected");
   assert.equal(first.reason, "unknown_handle");
   assert.equal((await send(h, args())).duplicate, true);
-  assert.equal((await send(h, args(2))).reason, "recipient_window_limit");
+  assert.equal((await send(h, args(2))).reason, "unknown_handle");
 });
 
 test("storage failure before reserve performs no POST", async () => {

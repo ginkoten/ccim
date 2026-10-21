@@ -41,51 +41,46 @@ test("broadcasts and own messages do not wake", async () => {
   assert.deepEqual(s.messages.map((m) => [m.id, m.class]), [[b, "broadcast"], [99, "own"]]);
 });
 
-test("hop limit: messages tagged hop>=2 are recorded but do not wake; hop 1 still wakes", async () => {
+test("high-hop direct messages wake and remain readable", async () => {
+  const h = harness({ MAX_HOP: "2" });
+  const ids = [2, 32, 256].map(hop => h.relay.deliver("claude", "grok", `continue [hop:${hop}]`));
+  await h.tick();
+  assert.deepEqual(JSON.parse(h.webhook.calls[0].body).message_ids, ids);
+  assert.deepEqual((await h.mcp("grok_inbox")).structuredContent.messages.map(m => m.id), ids);
+  assert.ok((await status(h, ids)).messages.every(m => m.class === "direct"));
+});
+
+test("wake frequency and daily legacy quotas no longer defer new work", async () => {
+  const h = harness({ DAILY_CAP: "1", SENDER_LIMIT: "1" });
+  await h.storage.put("day:2026-10-20", 100);
+  await h.storage.put("rate:neo-codex", [h.clock.t]);
+  for (let i = 0; i < 35; i++) {
+    h.relay.deliver("neo-codex", "grok", `m${i}`);
+    assert.equal((await h.tick()).woke, true);
+  }
+  const s = await status(h);
+  assert.equal(s.summary.wakes_today, 135);
+  for (const key of ["daily_cap", "sender_limit", "hop_limit", "send_limit", "send_daily_cap"]) assert.equal(s.summary[key], null);
+  await h.tick();
+  assert.equal(h.webhook.calls.length, 35, "no repeated wake of the same messages");
+});
+
+test("upgrade recovers live hop-blocked messages without resetting receipts or reviving acked messages", async () => {
   const h = harness();
-  const hi = h.relay.deliver("neo-codex", "grok", "ok thanks\n\n[ccim-auto from=neo-codex hop=2 re=#5]");
-  const hi2 = h.relay.deliver("claude", "grok", "noted [hop:3]");
-  const lo = h.relay.deliver("claude", "grok", "question [hop:1]");
+  const { key } = await import("../src/core.js");
+  const ids = [1, 2, 3].map(() => h.relay.deliver("claude", "grok", "work [hop:8]"));
+  for (let i = 0; i < ids.length; i++) {
+    await h.storage.put(key(ids[i]), { id: ids[i], from: "claude", to: "grok", hop: 8, cls: "hop_limit", replies: [],
+      stages: { recorded: 123, ...(i === 1 ? { woken: 234 } : {}), ...(i === 2 ? { acked: 345 } : {}) }, wake: { attempts: 0 } });
+  }
+  await h.tick();
+  assert.deepEqual(JSON.parse(h.webhook.calls[0].body).message_ids, [ids[0]]);
+  const messages = (await status(h, ids)).messages;
+  assert.ok(messages.every(m => m.class === "direct" && m.stages.recorded === 123));
+  assert.equal(messages[1].stages.woken, 234);
+  assert.equal(messages[2].stages.acked, 345);
   await h.tick();
   assert.equal(h.webhook.calls.length, 1);
-  assert.deepEqual(JSON.parse(h.webhook.calls[0].body).message_ids, [lo]);
-  const s = await status(h, [hi, hi2]);
-  assert.deepEqual(s.messages.map((m) => m.class), ["hop_limit", "hop_limit"]);
-});
-
-test("rate limit: at most 3 wakes per sender per 10 minutes, the rest deferred then woken later", async () => {
-  const h = harness();
-  const ids = [];
-  for (let i = 0; i < 5; i++) {
-    ids.push(h.relay.deliver("neo-codex", "grok", `m${i}`));
-    await h.tick();
-    h.advance(1);
-  }
-  assert.equal(h.webhook.calls.length, 3);
-  const s = await status(h, ids.slice(3));
-  assert.ok(s.messages.every((m) => m.stage === "recorded" && m.wake.deferred === "rate_limit"));
-  // another sender is not affected
-  h.relay.deliver("claude", "grok", "c1");
-  await h.tick();
-  assert.equal(h.webhook.calls.length, 4);
-  assert.deepEqual(JSON.parse(h.webhook.calls[3].body).senders, ["claude"]);
-  // after the window, the deferred neo-codex messages wake together in one call
-  h.advance(10);
-  await h.tick();
-  assert.equal(h.webhook.calls.length, 5);
-  assert.deepEqual(JSON.parse(h.webhook.calls[4].body).message_ids, ids.slice(3));
-});
-
-test("daily cap stops wakes for the day and resumes the next day (UTC+8 day boundary)", async () => {
-  const h = harness({ DAILY_CAP: "2", SENDER_LIMIT: "100" });
-  for (let i = 0; i < 3; i++) { h.relay.deliver("neo-codex", "grok", `m${i}`); await h.tick(); h.advance(1); }
-  assert.equal(h.webhook.calls.length, 2);
-  const s = await status(h);
-  assert.equal(s.summary.wakes_today, 2);
-  assert.ok(s.messages.some((m) => m.wake.deferred === "daily_cap"));
-  h.advance(24 * 60);
-  await h.tick();
-  assert.equal(h.webhook.calls.length, 3);
 });
 
 test("webhook failures (rate limit text, 500, network) retry on later ticks with backoff, bounded", async () => {

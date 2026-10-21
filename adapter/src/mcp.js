@@ -22,12 +22,12 @@ const validClientId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{8,64}$/.
 export const TOOLS = [
   {
     name: "grok_send",
-    description: "Send an authorized proactive message as grok, only to claude or neo-codex; no broadcast. For replies prefer grok_reply. hop is the incoming chain hop (0 for a new message); hop >= 2 is refused. If continuing a received message, also provide source_message_id. Check outcome: sent has relay_id; rejected was refused; uncertain may be delivered. Never resend uncertain with any clientId; use grok_status(clientId) and reconcile with the recipient. Per-recipient rate and daily limits apply to actual attempts.",
+    description: "Send an authorized proactive message as grok, only to claude or neo-codex; no broadcast. For replies prefer grok_reply. hop is the incoming chain hop (0 for a new message); hop is retained for tracing without an upper quota. If continuing a received message, also provide source_message_id. Check outcome: sent has relay_id; rejected was refused; uncertain may be delivered. Never resend uncertain with any clientId; use grok_status(clientId) and reconcile with the recipient. No adapter send-frequency or daily quota applies.",
     inputSchema: object({
       to: { type: "string", enum: ["claude", "neo-codex"] },
       text: { type: "string", minLength: 1, maxLength: MAX_TEXT - 100 },
       clientId: clientIdSchema,
-      hop: { type: "integer", minimum: 0, maximum: 1, description: "Incoming chain hop; output is hop + 1. Required; 0 only for a genuinely new message." },
+      hop: { type: "integer", minimum: 0, description: "Incoming chain hop; output is hop + 1. Required; 0 only for a genuinely new message." },
       source_message_id: { type: "integer", minimum: 1 },
     }, ["to", "text", "clientId", "hop"]),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -37,7 +37,7 @@ export const TOOLS = [
     description: "Read messages waiting for grok on the ccim channel without acknowledging them. By default returns messages addressed directly to grok that are not acked yet. Pass ids to read specific messages (for example the message_ids from a wake).",
     inputSchema: object({
       ids: { ...idList, description: "Message ids to read." },
-      include_skipped: { type: "boolean", description: "Also return broadcasts and hop-limited messages that did not wake you." },
+      include_skipped: { type: "boolean", description: "Also return broadcasts that did not wake you." },
       limit: { type: "integer", minimum: 1, maximum: 200 },
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -133,7 +133,7 @@ const HANDLERS = {
     if (!["claude", "neo-codex"].includes(args.to)) return reject("recipient_not_allowed");
     if (!validClientId(args.clientId)) return reject("invalid_client_id");
     if (typeof args.text !== "string" || !args.text.trim()) return reject("empty_text");
-    if (!Number.isInteger(args.hop) || args.hop < 0 || args.hop >= Math.min(2, ctx.cfg.maxHop)) return reject("hop_limit");
+    if (!Number.isSafeInteger(args.hop) || args.hop < 0) return reject("invalid_hop");
     if (redact(JSON.stringify(args), ctx.env) !== JSON.stringify(args)) return reject("credential_in_arguments");
     let incomingHop = Math.max(args.hop, parseHop(args.text).hop);
     if (args.source_message_id !== undefined) {
@@ -147,8 +147,8 @@ const HANDLERS = {
       if (!meta || meta.cls === "own") return reject("source_message_unavailable");
       incomingHop = Math.max(incomingHop, meta.hop);
     }
-    if (incomingHop >= Math.min(2, ctx.cfg.maxHop)) return reject("hop_limit");
     const hop = incomingHop + 1;
+    if (!Number.isSafeInteger(hop)) return reject("invalid_hop");
     const tag = args.source_message_id === undefined ? `[ccim-auto from=grok hop=${hop}]` : autoTag("grok", hop, args.source_message_id);
     const text = `${args.text.trimEnd()}\n\n${tag}`;
     if (text.length > MAX_TEXT) return reject("text_too_long");
@@ -202,9 +202,9 @@ const HANDLERS = {
         check: { tool: "grok_status", arguments: { ids: [id] } } },
     );
     if (meta.cls === "own" || meta.from === ctx.cfg.handle) return toolError("You cannot reply to your own message.");
-    if (meta.hop >= ctx.cfg.maxHop) return toolError(`Message #${id} is already at hop ${meta.hop} (limit ${ctx.cfg.maxHop}). Do not reply; tell your user instead.`);
 
     const hop = meta.hop + 1;
+    if (!Number.isSafeInteger(hop)) return toolError("Invalid hop metadata; no reply submitted.");
     const full = `${text.trimEnd()}\n\n${autoTag(ctx.cfg.handle, hop, id)}`;
     if (full.length > MAX_TEXT) return toolError(`Text too long (max about ${MAX_TEXT - 100} characters).`);
     const clientId = `${ctx.cfg.handle}-re-${id}-p${part}`;
@@ -232,7 +232,7 @@ const HANDLERS = {
     const rows = await Promise.all(metas.map((meta) => view(meta, ctx)));
     const missing = args.ids ? args.ids.filter((id) => !rows.some((row) => row.id === id)) : [];
     const lines = rows.map((r) => `#${r.id} from ${r.from} [${r.class}] ${r.stage_cn}${r.reply_uncertain ? "；回复状态不确定：不要重发或换 part，请与接收方核对" : ""}${r.gone ? " (acked elsewhere)" : ""}${r.wake.failed ? " (wake failed)" : ""}${r.wake.deferred ? ` (deferred: ${r.wake.deferred})` : ""}`);
-    lines.unshift(`wakes today ${s.wakes_today}/${s.daily_cap}; open ${s.open}; last poll ${s.poll ? `${s.poll.ok ? "ok" : `failed: ${s.poll.error}`}` : "none yet"}`);
+    lines.unshift(`wakes today ${s.wakes_today} (no adapter quota); open ${s.open}; last poll ${s.poll ? `${s.poll.ok ? "ok" : `failed: ${s.poll.error}`}` : "none yet"}`);
     if (missing.length) lines.push(`No record in the current adapter state: ${missing.join(", ")}. Previous relay records are not searched; missing does not mean deleted or never received.`);
     return ok(lines.join("\n"), { summary: s, messages: rows, missing });
   },

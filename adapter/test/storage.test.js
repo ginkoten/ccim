@@ -23,23 +23,19 @@ test("relay namespaces isolate message ids, pending records and reply reservatio
   assert.equal(await scopedStorage(raw, "another-relay/channel/grok").get("reply:1:p1"), undefined);
 });
 
-test("switching namespaces preserves daily and sender wake budgets", async () => {
+test("switching namespaces preserves observational wake counts, without old quota enforcement", async () => {
   const h = harness();
   h.relay.deliver("neo-codex", "grok", "first");
   assert.equal((await h.tick()).woke, true);
   const oldPoll = await h.storage.get("poll");
   h.env.STATE_NAMESPACE = "new-relay/channel/grok";
   h.env.DAILY_CAP = "1";
-  assert.equal((await h.tick()).deferred, "daily_cap");
-  assert.equal(h.webhook.calls.length, 1);
+  h.env.SENDER_LIMIT = "0";
+  assert.equal((await h.tick()).woke, true);
+  assert.equal(h.webhook.calls.length, 2);
   const status = (await h.mcp("grok_status")).structuredContent;
-  assert.equal(status.summary.wakes_today, 1);
-  h.env.DAILY_CAP = "30";
-  h.env.SENDER_LIMIT = "1";
-  assert.equal((await h.tick()).deferred, "rate_limit");
-  assert.equal(h.webhook.calls.length, 1);
-  const scoped = scopedStorage(h.storage, h.env.STATE_NAMESPACE);
-  assert.deepEqual(await scoped.get("rate:neo-codex"), await h.storage.get("rate:neo-codex"));
+  assert.equal(status.summary.wakes_today, 2);
+  assert.equal(status.summary.daily_cap, null);
   assert.deepEqual(await h.storage.get("poll"), oldPoll);
 });
 

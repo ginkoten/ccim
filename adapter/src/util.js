@@ -13,13 +13,6 @@ export function config(env = {}) {
     handle: env.CCIM_HANDLE || "grok",
     relayMode: env.RELAY_MODE === "author-mcp" ? "author-mcp" : "direct",
     mcpEnabled: env.MCP_ENABLED !== "off",
-    maxHop: int("MAX_HOP", 2),
-    senderLimit: int("SENDER_LIMIT", 3),
-    senderWindowMs: int("SENDER_WINDOW_MIN", 10) * 60 * 1000,
-    dailyCap: int("DAILY_CAP", 30),
-    sendLimit: int("SEND_LIMIT", 10),
-    sendWindowMs: Math.max(1, int("SEND_WINDOW_MIN", 10)) * 60 * 1000,
-    sendDailyCap: int("SEND_DAILY_CAP", 100),
     wakeMaxAttempts: int("WAKE_MAX_ATTEMPTS", 5),
     dayOffsetMs: int("DAY_TZ_OFFSET_MIN", 480) * 60 * 1000,
   };

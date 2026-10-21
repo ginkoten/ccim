@@ -4,7 +4,6 @@
 // Storage layout (no message text is ever stored):
 //   msg:<id12>        -> { id, from, to, ts, hop, auto, cls, stages:{recorded,woken,acked,replied,gone}, wake, replies }
 //   open:<id12>       -> 1 while a direct message has not been acked or gone (keeps ticks cheap)
-//   rate:<sender>     -> [timestamps of successful wakes that included this sender]
 //   day:<YYYY-MM-DD>  -> number of successful wakes that day (day in DAY_TZ_OFFSET_MIN, default UTC+8)
 //   poll              -> { at, ok, error, queued }
 //
@@ -35,13 +34,12 @@ export function stageOf(meta) {
   return best;
 }
 
-// Why a message does or does not wake the Bot. Order matters: own > broadcast > hop limit > direct.
+// Why a message does or does not wake the Bot. Order matters: own > broadcast > direct. Hop is trace metadata, not a quota.
 export function classify(msg, cfg) {
   const { hop, auto } = parseHop(msg.text);
   let cls = "direct";
   if (msg.from === cfg.handle) cls = "own";
   else if (msg.to !== cfg.handle) cls = "broadcast"; // to:"*" (relay/src/index.js:158, :167)
-  else if (hop >= cfg.maxHop) cls = "hop_limit";
   return { cls, hop, auto };
 }
 
@@ -50,7 +48,17 @@ export async function ingest(ctx, messages) {
   const fresh = [];
   for (const m of messages) {
     if (!Number.isInteger(m.id) || m.id < 1) continue;
-    if (await ctx.storage.get(key(m.id))) continue;
+    const existing = await ctx.storage.get(key(m.id));
+    if (existing) {
+      // Upgrade only live, previously hop-blocked records; never reset completion or wake receipts.
+      if (existing.cls === "hop_limit" && classify(m, ctx.cfg).cls === "direct") {
+        existing.cls = "direct";
+        const puts = { [key(m.id)]: existing };
+        if (!existing.stages.acked && !existing.stages.gone) puts[openKey(m.id)] = 1;
+        await ctx.storage.put(puts);
+      }
+      continue;
+    }
     const { cls, hop, auto } = classify(m, ctx.cfg);
     const meta = { id: m.id, from: m.from, to: m.to, ts: m.ts, urgent: !!m.urgent, hop, auto, cls, stages: { recorded: ctx.now() }, wake: { attempts: 0 }, replies: [] };
     const puts = { [key(m.id)]: meta };
@@ -67,11 +75,6 @@ async function openMetas(ctx) {
   if (!keys.length) return [];
   const got = await ctx.storage.get(keys);
   return keys.map((k) => got.get(k)).filter(Boolean);
-}
-
-async function senderAllowed(ctx, sender, now) {
-  const stamps = ((await ctx.storage.get(`rate:${sender}`)) || []).filter((t) => now - t < ctx.cfg.senderWindowMs);
-  return { allowed: stamps.length < ctx.cfg.senderLimit, stamps };
 }
 
 // One cron tick: peek, record, decide, wake at most once.
@@ -103,23 +106,7 @@ export async function tick(ctx) {
 
   const day = `day:${dayKey(now, ctx.cfg.dayOffsetMs)}`;
   const today = (await ctx.storage.get(day)) || 0;
-  if (today >= ctx.cfg.dailyCap) {
-    for (const m of candidates) if (m.wake.deferred !== "daily_cap") await ctx.storage.put(key(m.id), { ...m, wake: { ...m.wake, deferred: "daily_cap" } });
-    ctx.log("wake_deferred", { reason: "daily_cap", count: candidates.length });
-    return { polled: true, woke: false, deferred: "daily_cap" };
-  }
-
-  const batch = [];
-  const stamps = new Map();
-  for (const m of candidates) {
-    if (!stamps.has(m.from)) stamps.set(m.from, await senderAllowed(ctx, m.from, now));
-    if (stamps.get(m.from).allowed) batch.push(m);
-    else if (m.wake.deferred !== "rate_limit") await ctx.storage.put(key(m.id), { ...m, wake: { ...m.wake, deferred: "rate_limit" } });
-  }
-  if (!batch.length) {
-    ctx.log("wake_deferred", { reason: "rate_limit", count: candidates.length });
-    return { polled: true, woke: false, deferred: "rate_limit" };
-  }
+  const batch = candidates;
 
   const senders = [...new Set(batch.map((m) => m.from))];
   const result = await postWebhook(ctx, { channel: ctx.cfg.channel, message_ids: batch.map((m) => m.id), senders });
@@ -128,7 +115,6 @@ export async function tick(ctx) {
       const wake = { ...m.wake, attempts: m.wake.attempts + 1, deferred: undefined, lastError: undefined, runUuid: result.runUuid };
       await ctx.storage.put(key(m.id), { ...m, stages: { ...m.stages, woken: now }, wake });
     }
-    for (const s of senders) await ctx.storage.put(`rate:${s}`, [...stamps.get(s).stamps, now]);
     await ctx.storage.put(day, today + 1);
     ctx.log("woken", { ids: batch.map((m) => m.id), run: result.runUuid ? String(result.runUuid).slice(0, 8) : undefined });
     return { polled: true, woke: true, ids: batch.map((m) => m.id) };
@@ -197,8 +183,11 @@ export async function summary(ctx) {
     poll: (await ctx.storage.get("poll")) || null,
     open: (await ctx.storage.list({ prefix: "open:" })).size,
     wakes_today: (await ctx.storage.get(`day:${day}`)) || 0,
-    daily_cap: ctx.cfg.dailyCap,
-    sender_limit: `${ctx.cfg.senderLimit} per ${ctx.cfg.senderWindowMs / 60000} min`,
+    daily_cap: null,
+    sender_limit: null,
+    hop_limit: null,
+    send_limit: null,
+    send_daily_cap: null,
   };
 }
 

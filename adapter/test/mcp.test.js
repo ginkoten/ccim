@@ -55,15 +55,15 @@ test("grok_reply goes only to the original sender, with hop tag and deterministi
   assert.equal(h.relay.queues.get("claude").size, 0);
 });
 
-test("grok_reply refuses unknown ids, own messages and hop-limited messages", async () => {
+test("grok_reply refuses unknown ids and own messages but permits higher hops", async () => {
   const h = harness();
   assert.equal((await h.mcp("grok_reply", { reply_to_id: 42, text: "x" })).isError, true);
   h.relay.queues.get("grok").set(7, { type: "msg", id: 7, from: "grok", to: "grok", text: "self", urgent: false, ts: 1 });
   const hopId = h.relay.deliver("claude", "grok", "fine [ccim-auto from=claude hop=2 re=#3]");
   await h.tick();
   assert.match((await h.mcp("grok_reply", { reply_to_id: 7, text: "x" })).content[0].text, /own message/);
-  assert.match((await h.mcp("grok_reply", { reply_to_id: hopId, text: "x" })).content[0].text, /hop 2/);
-  assert.equal(h.relay.queues.get("claude").size, 0);
+  assert.equal((await h.mcp("grok_reply", { reply_to_id: hopId, text: "x" })).structuredContent.hop, 3);
+  assert.equal(h.relay.queues.get("claude").size, 1);
 });
 
 test("a failed relay lookup is not reported as a missing message or a submitted reply", async () => {
@@ -79,7 +79,7 @@ test("a failed relay lookup is not reported as a missing message or a submitted 
   assert.equal(h.relay.queues.get("neo-codex").size, 0);
 });
 
-test("reply to a hop-1 message is tagged hop 2, which the other side's adapter would skip", async () => {
+test("reply keeps the hop marker for tracing", async () => {
   const h = harness();
   const id = h.relay.deliver("claude", "grok", "answer this [hop:1]");
   await h.tick();

@@ -1,6 +1,6 @@
 // Reserve before POST so a lost response or process restart cannot trigger another send.
 // Only hashes and delivery metadata are stored; message text is never persisted.
-import { dayKey, sha256 } from "./util.js";
+import { sha256 } from "./util.js";
 
 const recordKey = async (clientId) => `send:${await sha256(clientId)}`;
 const pendingKey = (to) => `send-pending:${to}`;
@@ -61,18 +61,9 @@ async function reserve(ctx, key, attempt) {
     if (pending) return { record: {
       ...attempt, outcome: "rejected", reason: "recipient_has_unconfirmed_send", blocked_by: pending,
     } };
-    const rateKey = `rate:send:${attempt.to}`;
-    const day = dayKey(attempt.started_at, ctx.cfg.dayOffsetMs);
-    const rate = await tx.get(rateKey) || { recent: [], day, count: 0 };
-    const recent = rate.recent.filter((t) => t > attempt.started_at - ctx.cfg.sendWindowMs);
-    const count = rate.day === day ? rate.count : 0;
-    const reason = recent.length >= ctx.cfg.sendLimit ? "recipient_window_limit"
-      : count >= ctx.cfg.sendDailyCap ? "recipient_daily_limit" : null;
-    if (reason) return { record: { ...attempt, outcome: "rejected", reason } };
     await tx.put({
       [key]: attempt,
       [pendingKey(attempt.to)]: attempt.clientId,
-      [rateKey]: { recent: [...recent, attempt.started_at], day, count: count + 1 },
     });
     return { send: true };
   });
