@@ -1,6 +1,8 @@
+> Historical upstream OAuth design/rollout reference; deployment identifiers below are placeholders. This is not evidence of this rebuild or a guarantee of current account UI. Start with [Ginko-Bridge rebuild](ginko-bridge/rebuild.md).
+
 # CCIM 远程 MCP + OAuth
 
-让 Dot（ChatGPT）通过远程 MCP 直接调用 CCIM，身份固定为 `xd-bridge/xd-dot`。原有 CLI、WebSocket、成员凭据、Mac 上的桥接都不动。
+让 Dot（ChatGPT）通过远程 MCP 直接调用 CCIM，身份固定为 `example-channel/example-member`。原有 CLI、WebSocket、成员凭据、Mac 上的桥接都不动。
 
 依据（2026-10-13 读过）：developers.openai.com/plugins/build/auth、/deploy/connect-chatgpt、/quickstart、/build/mcp-events，learn.chatgpt.com/docs/dots/computers-and-apps。
 
@@ -19,7 +21,7 @@
 - `relay/src/index.js`：路由；频道 API 加三个可选能力（见下）。
 - `relay/wrangler.toml`：`AUTH` 绑定、迁移 `v3`、三个 var。
 
-## 地址（同域 `https://ccim.web3nomad.com`）
+## 地址（同域 `https://relay.example.invalid`）
 
 | 路径 | 方法 | 谁来请求 |
 |---|---|---|
@@ -34,7 +36,7 @@
 
 ## OAuth
 
-- 资源标识：`https://ccim.web3nomad.com`（OpenAI 文档写的是 origin）和 `https://ccim.web3nomad.com/mcp` 都接受，其他 `resource` 回 `invalid_target`。不带 `resource` 时按 origin 处理。token 记下签发时的 resource，`/mcp` 每次校验。
+- 资源标识：`https://relay.example.invalid`（OpenAI 文档写的是 origin）和 `https://relay.example.invalid/mcp` 都接受，其他 `resource` 回 `invalid_target`。不带 `resource` 时按 origin 处理。token 记下签发时的 resource，`/mcp` 每次校验。
 - 授权服务器元数据：`issuer`、`authorization_endpoint`、`token_endpoint`、`registration_endpoint`、`revocation_endpoint`，`response_types_supported: ["code"]`，`grant_types_supported: ["authorization_code","refresh_token"]`，`code_challenge_methods_supported: ["S256"]`，`token_endpoint_auth_methods_supported: ["none"]`，`client_id_metadata_document_supported: true`，`authorization_response_iss_parameter_supported: true`，`scopes_supported: ["ccim:read","ccim:write"]`。
 - 客户端登记：默认只走 DCR，不写死 client_id。CIMD 代码保留，但默认关闭（元数据 `client_id_metadata_document_supported: false`），设 var `OAUTH_CIMD=on` 才打开。原因：线上 ChatGPT 优先用 CIMD，而 chatgpt.com 对 Worker 去取它的 `client.json` 一律回 403 挑战页，授权页只能显示 "Unknown client"。关掉 CIMD 后，在 ChatGPT 里删掉连接重新添加，它就改走 DCR 了。
   - CIMD：client_id 是 https 地址。服务端去取：不跟随重定向，主机不能是 IP，5 秒超时，64 KB 上限，文档里 `client_id` 必须等于 URL，要支持 `none`，缓存 10 分钟。
@@ -50,16 +52,16 @@
 
 CCIM 没有账号，首版也不加。授权页填三项：频道、成员名（只有一个允许的组合时会预填）、频道 secret。
 
-- 只允许 `MCP_ALLOWED_BINDINGS` 里的组合（部署值 `xd-bridge/xd-dot`）。不能新建频道（join 带 `mustExist`）。
+- 只允许 `MCP_ALLOWED_BINDINGS` 里的组合（部署值 `example-channel/example-member`）。不能新建频道（join 带 `mustExist`）。
 - secret 只在这个 POST 表单里出现：不存、不记日志、不进 URL、不回显、不进 MCP。页面带 `Cache-Control: no-store`、CSP `frame-ancestors 'none'`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`。
 - 一个授权请求最多错 5 次，然后作废，回跳 `access_denied`。
 - **安全复用 join**：
   - 新增 `POST /c/<ch>/verify`：只校验 secret，不改任何东西。
   - join 加两个可选字段：`ifAbsent`（成员已存在时回 409，不替换）和 `mustExist`（频道不存在时回 404，不新建）。CLI 不传，行为不变。
-  - 第一次授权：xd-dot 不存在，用 `ifAbsent` 加入，拿到成员 token。
+  - 第一次授权：example-member 不存在，用 `ifAbsent` 加入，拿到成员 token。
   - 重新授权：服务端已有的成员 token 用 `who` 验证还有效，就直接复用，不重新 join，排队的消息都还在。
-  - xd-dot 被 CLI 占着：拒绝，提示对方先离开或换名字。
-  - 授权后有人用 CLI 以 xd-dot 加入（最新加入的占有这个名字，CCIM 原有规则）：工具调用拿到 401 → 服务端作废授权、丢掉旧成员 token，Dot 要重新连接；那个 CLI 成员不受影响。
+  - example-member 被 CLI 占着：拒绝，提示对方先离开或换名字。
+  - 授权后有人用 CLI 以 example-member 加入（最新加入的占有这个名字，CCIM 原有规则）：工具调用拿到 401 → 服务端作废授权、丢掉旧成员 token，Dot 要重新连接；那个 CLI 成员不受影响。
 - 成员 token 用 AES-GCM 加密（密钥 `OAUTH_ENC_KEY`，频道/成员名作附加数据），存在 `Auth` 里，只在服务端调用频道 API 时解密。OAuth token 和成员 token 是两层。
 
 ## 工具
@@ -86,8 +88,8 @@ CCIM 没有账号，首版也不加。授权页填三项：频道、成员名（
 ## 环境变量
 
 - `OAUTH_ENC_KEY`（secret）：32 字节随机数的 base64，用来加密成员 token。缺了就不启用 OAuth。
-- `OAUTH_ISSUER`（var，写在 wrangler.toml）：`https://ccim.web3nomad.com`
-- `MCP_ALLOWED_BINDINGS`（var）：`xd-bridge/xd-dot`
+- `OAUTH_ISSUER`（var，写在 wrangler.toml）：`https://relay.example.invalid`
+- `MCP_ALLOWED_BINDINGS`（var）：`example-channel/example-member`
 - `OAUTH_REDIRECT_HOSTS`（var）：`chatgpt.com`
 
 ## 测试
@@ -96,12 +98,12 @@ CCIM 没有账号，首版也不加。授权页填三项：频道、成员名（
 
 - `test/mcp.test.js`：协议版本、没配 OAuth 时只有探针、nonce、错误码。
 - `test/policy.test.js`：redirect 白名单、CIMD 校验、scope、配置缺项不启用、元数据字段、未启用时工具隐藏。
-- `test/flow.test.js`：起一个本地 `wrangler dev`（全新存储，测试自己生成的 secret 和密钥），再用一个本地 HTTP 服务扮演 ChatGPT（发布 CIMD 文档）。覆盖：发现元数据；无 token/坏 token 的 401 与 `WWW-Authenticate`；授权请求的各种拒绝（未知客户端、redirect 不一致、缺 PKCE、plain、错 response_type、错 resource）并带 state 和 iss；错 secret、不允许的组合、CLI 已占用 xd-dot 时拒绝且对方 token 仍有效；5 次失败作废；拒绝授权；授权码错 verifier/重用/错 redirect/错 client/错 resource，重用后已发 token 失效；四个工具；身份参数被拒；send 同 id 重试不重复投递、不同内容 409；inbox 不 ack、分页、ack 后消失；256 条限流（重复不计数，CLI 的 human 重置仍有效）；只读 scope 不能发送；refresh 轮换、重用旧 refresh 作废整个授权、不能扩 scope、不能换 client；重新连接复用成员、离线期间的消息还在；撤销端点；CLI 抢占 xd-dot 后授权失效且 CLI 成员正常；管理页撤销和"撤销并离开"；DCR；授权页安全头；原有 API 不变（最新 join 抢占、错 secret、新建频道、真实 `plugin/bin/ccim` CLI 的 join/send/who）；日志和响应里没有 secret、密钥、token。
+- `test/flow.test.js`：起一个本地 `wrangler dev`（全新存储，测试自己生成的 secret 和密钥），再用一个本地 HTTP 服务扮演 ChatGPT（发布 CIMD 文档）。覆盖：发现元数据；无 token/坏 token 的 401 与 `WWW-Authenticate`；授权请求的各种拒绝（未知客户端、redirect 不一致、缺 PKCE、plain、错 response_type、错 resource）并带 state 和 iss；错 secret、不允许的组合、CLI 已占用 example-member 时拒绝且对方 token 仍有效；5 次失败作废；拒绝授权；授权码错 verifier/重用/错 redirect/错 client/错 resource，重用后已发 token 失效；四个工具；身份参数被拒；send 同 id 重试不重复投递、不同内容 409；inbox 不 ack、分页、ack 后消失；256 条限流（重复不计数，CLI 的 human 重置仍有效）；只读 scope 不能发送；refresh 轮换、重用旧 refresh 作废整个授权、不能扩 scope、不能换 client；重新连接复用成员、离线期间的消息还在；撤销端点；CLI 抢占 example-member 后授权失效且 CLI 成员正常；管理页撤销和"撤销并离开"；DCR；授权页安全头；原有 API 不变（最新 join 抢占、错 secret、新建频道、真实 `plugin/bin/ccim` CLI 的 join/send/who）；日志和响应里没有 secret、密钥、token。
 
 ## 线上实测（2026-10-14）
 
 - 登记方式：DCR（client_id 形如 `dcr_…`）。撤销后重新授权，ChatGPT 复用了同一个 client，没有再注册。
-- `resource`：`https://ccim.web3nomad.com/mcp`。
+- `resource`：`https://relay.example.invalid/mcp`。
 - 回跳地址：`https://chatgpt.com/connector/oauth/{callback_id}`。
 - scope：`ccim:read ccim:write`。
 - token 端点的 UA：`openai-connectors-oauth/1.0`；MCP 请求的 UA：`openai-mcp/1.0.0`；发现请求的 UA：`Python aiohttp`。

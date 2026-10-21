@@ -1,3 +1,5 @@
+> Historical upstream OAuth design/rollout reference; deployment identifiers below are placeholders. This is not evidence of this rebuild or a guarantee of current account UI. Start with [Ginko-Bridge rebuild](ginko-bridge/rebuild.md).
+
 # CCIM 远程 MCP + OAuth 上线范围
 
 给 XD 和 Codex 审阅用。本文不含任何 secret。设计见 [mcp-oauth-design.md](mcp-oauth-design.md)。
@@ -7,7 +9,7 @@
 
 ## 1. 放行矩阵
 
-现有 Configuration Rule（XD 已加）对 `ccim.web3nomad.com` 的 `/c/*` 和 `/mcp` 跳过 Browser Integrity Check（下称 BIC），只按路径匹配，不看方法。
+现有 Configuration Rule（XD 已加）对 `relay.example.invalid` 的 `/c/*` 和 `/mcp` 跳过 Browser Integrity Check（下称 BIC），只按路径匹配，不看方法。
 
 | 路径 | 方法 | 谁来请求 | 跳过 BIC | Worker 的行为 |
 |---|---|---|---|---|
@@ -36,7 +38,7 @@
 完整表达式（替换现有那条规则的表达式；动作照旧，只跳过 BIC）：
 
 ```
-(http.host eq "ccim.web3nomad.com" and (
+(http.host eq "relay.example.invalid" and (
   starts_with(http.request.uri.path, "/c/")
   or (http.request.uri.path eq "/mcp" and http.request.method in {"POST" "OPTIONS"})
   or (http.request.method eq "GET" and http.request.uri.path in {"/.well-known/oauth-protected-resource" "/.well-known/oauth-protected-resource/mcp" "/.well-known/oauth-authorization-server"})
@@ -49,7 +51,7 @@ Cloudflare 的表达式编辑器接受换行；不接受就去掉换行写成一
 不加方法约束的版本（仅供对照）：
 
 ```
-(http.host eq "ccim.web3nomad.com" and (starts_with(http.request.uri.path, "/c/") or http.request.uri.path in {"/mcp" "/.well-known/oauth-protected-resource" "/.well-known/oauth-protected-resource/mcp" "/.well-known/oauth-authorization-server" "/oauth/token" "/oauth/register" "/oauth/revoke"}))
+(http.host eq "relay.example.invalid" and (starts_with(http.request.uri.path, "/c/") or http.request.uri.path in {"/mcp" "/.well-known/oauth-protected-resource" "/.well-known/oauth-protected-resource/mcp" "/.well-known/oauth-authorization-server" "/oauth/token" "/oauth/register" "/oauth/revoke"}))
 ```
 
 **未验证：** 表达式语法没在 Cloudflare 上校验过；改完后 OpenAI 服务器访问这些路径是否还会被别的防护拦，也没验证。
@@ -58,8 +60,8 @@ Cloudflare 的表达式编辑器接受换行；不接受就去掉换行写成一
 
 | 名字 | 拟用值 | 作用 |
 |---|---|---|
-| `OAUTH_ISSUER` | `https://ccim.web3nomad.com` | issuer、资源标识（也接受 `…/mcp`）、元数据里所有地址的前缀。回跳里的 `iss` 必须与它逐字相等 |
-| `MCP_ALLOWED_BINDINGS` | `xd-bridge/xd-dot` | 唯一允许授权的频道/成员 |
+| `OAUTH_ISSUER` | `https://relay.example.invalid` | issuer、资源标识（也接受 `…/mcp`）、元数据里所有地址的前缀。回跳里的 `iss` 必须与它逐字相等 |
+| `MCP_ALLOWED_BINDINGS` | `example-channel/example-member` | 唯一允许授权的频道/成员 |
 | `OAUTH_REDIRECT_HOSTS` | `chatgpt.com` | 允许的回跳主机。OpenAI 文档里的两种回跳地址（`https://chatgpt.com/connector/oauth/{callback_id}`、`https://chatgpt.com/connector_platform_oauth_redirect`）都在这个主机上 |
 
 出处：`wrangler deploy --dry-run` 输出里列出了这三个值和两个 Durable Object 绑定（见第 7 节）。
@@ -92,7 +94,7 @@ new_sqlite_classes = ["Auth"]
 
 - **v3 是新增一个类，不改动、不删除旧类的数据。**
 - **回滚代码不能直接回到 97541cac。** Cloudflare 的回滚文档写明："A Durable Object class lifecycle change … has occurred between the version in the active deployment and the version selected to roll back to" 时会拒绝回滚。v3 就是这种变化。所以 `wrangler rollback 97541cac…` 预计会被拒绝（没在线上试过）。
-- 要撤掉 v3，只能再发一次带 `deleted_classes = ["Auth"]` 的迁移 v4。按 Cloudflare 迁移文档，这会永久删除 `Auth` 的全部数据，没有回收站。频道数据不受影响，但 xd-dot 这个频道成员会留下来，没人再持有它的 token（处理办法见第 4 节）。
+- 要撤掉 v3，只能再发一次带 `deleted_classes = ["Auth"]` 的迁移 v4。按 Cloudflare 迁移文档，这会永久删除 `Auth` 的全部数据，没有回收站。频道数据不受影响，但 example-member 这个频道成员会留下来，没人再持有它的 token（处理办法见第 4 节）。
 - 所以真正可行的"回退"是**关掉开关**（第 4 节），代码留在线上。
 
 ### 验证证据（都是本地）
@@ -103,17 +105,17 @@ new_sqlite_classes = ["Auth"]
 
 ## 4. `OAUTH_ENC_KEY` 的影响
 
-这把密钥只用来加密服务端保存的 xd-dot 成员 token。OAuth 开关也由它决定：缺这把密钥、或它不是 32 字节，OAuth 就全部关闭。
+这把密钥只用来加密服务端保存的 example-member 成员 token。OAuth 开关也由它决定：缺这把密钥、或它不是 32 字节，OAuth 就全部关闭。
 
-| 操作 | 已有的 OAuth 授权 | 加密存放的成员 token | xd-dot 未 ack 的消息 | CLI、桥接凭据 | 出处 |
+| 操作 | 已有的 OAuth 授权 | 加密存放的成员 token | example-member 未 ack 的消息 | CLI、桥接凭据 | 出处 |
 |---|---|---|---|---|---|
-| **删除密钥（停用）** | 全部不能用：`/oauth/*`、`/.well-known/oauth-*` 回 503，四个工具从清单中消失、调用报 unknown tool。授权记录还在存储里 | 还在，没被解密也没被删除 | 还在；xd-dot 仍是频道成员，别人还能给它发消息，直到 200 条上限 | 不受影响 | deploy.test.js "key removed…" |
+| **删除密钥（停用）** | 全部不能用：`/oauth/*`、`/.well-known/oauth-*` 回 503，四个工具从清单中消失、调用报 unknown tool。授权记录还在存储里 | 还在，没被解密也没被删除 | 还在；example-member 仍是频道成员，别人还能给它发消息，直到 200 条上限 | 不受影响 | deploy.test.js "key removed…" |
 | **放回同一把密钥** | 原授权立即恢复。refresh token 在 30 天内还能用；access token 过了 1 小时就要刷新 | 能解密，照常使用 | 都还在，能读到 | 不受影响 | deploy.test.js "same key A restored…" |
-| **换一把不同的密钥** | 下一次调用：成员 token 解不开，服务端删掉它、作废授权，回 401。之后 refresh 也被拒 | 被删除（读不出来） | 还在 xd-dot 的队列里，但没有任何人能读或 ack | 不受影响 | deploy.test.js "different key B…" |
+| **换一把不同的密钥** | 下一次调用：成员 token 解不开，服务端删掉它、作废授权，回 401。之后 refresh 也被拒 | 被删除（读不出来） | 还在 example-member 的队列里，但没有任何人能读或 ack | 不受影响 | deploy.test.js "different key B…" |
 
-换密钥之后，重新授权会被拒（"已被另一会话占用"）。原因是 xd-dot 仍是频道成员，而安全 join 不会替换已有成员。要恢复：
+换密钥之后，重新授权会被拒（"已被另一会话占用"）。原因是 example-member 仍是频道成员，而安全 join 不会替换已有成员。要恢复：
 
-1. 用 CLI 以 xd-dot 加入一次（最新加入者占有这个名字，CCIM 原有规则），然后 `ccim leave`。这会同时清掉 xd-dot 队列里的消息。
+1. 用 CLI 以 example-member 加入一次（最新加入者占有这个名字，CCIM 原有规则），然后 `ccim leave`。这会同时清掉 example-member 队列里的消息。
 2. 在 ChatGPT 里重新授权。
 
 这条恢复路径在 deploy.test.js "different key B…" 里测过。
@@ -123,7 +125,7 @@ new_sqlite_classes = ["Auth"]
 - **停用**（已在本地验证）：删除 `OAUTH_ENC_KEY`。OAuth 立即关闭，频道和 CLI 不受影响，数据都留着。放回同一把密钥就恢复。**这是推荐的紧急开关。**
 - **代码回滚到 97541cac**：预计被 Cloudflare 拒绝（见第 3 节），**未验证，不能当作安全回滚**。
 - **删除 `Auth` 类**（v4 `deleted_classes`）：不可逆，会永久删掉所有 OAuth 数据，**未验证**。不建议，除非决定彻底放弃这个功能。
-- 删除密钥只是停用，不会自动撤销 xd-dot 的频道成员身份。如果担心授权记录已泄露，要做的是"撤销并离开"（第 6 节），而不是只删密钥。
+- 删除密钥只是停用，不会自动撤销 example-member 的频道成员身份。如果担心授权记录已泄露，要做的是"撤销并离开"（第 6 节），而不是只删密钥。
 
 注意：密钥是 Worker 的 secret，`wrangler secret put/delete` 会生成一个新的 Worker 版本立即上线，不需要重新部署代码。
 
@@ -153,7 +155,7 @@ openssl rand -base64 32 | npx wrangler secret put OAUTH_ENC_KEY
 **第 1 步：部署代码（这时 OAuth 还是关的）**
 - `cd ~/workspace/misc/ccim/.claude/worktrees/mcp-probe/relay && npx wrangler deploy`
 - 检查：
-  - `/c/xd-bridge/who`：curl 和 urllib 都是 401。
+  - `/c/example-channel/who`：curl 和 urllib 都是 401。
   - `/mcp` 的 tools/list 只有 `ccim_probe`。
   - `/.well-known/oauth-authorization-server` 回 503。
   - Dot 再调一次 `ccim_probe` 能拿到 nonce。
@@ -164,7 +166,7 @@ openssl rand -base64 32 | npx wrangler secret put OAUTH_ENC_KEY
 **第 2 步：设置密钥（打开 OAuth）**
 - 按第 5 节做。
 - 检查：
-  - `/.well-known/oauth-authorization-server` 返回 JSON，`issuer` 正好是 `https://ccim.web3nomad.com`。
+  - `/.well-known/oauth-authorization-server` 返回 JSON，`issuer` 正好是 `https://relay.example.invalid`。
   - `/mcp` 的 tools/list 有五个工具。
 - 停下：返回 503、500，或 issuer 不对。
 - 怎么退：`npx wrangler secret delete OAUTH_ENC_KEY`。
@@ -175,51 +177,51 @@ openssl rand -base64 32 | npx wrangler secret put OAUTH_ENC_KEY
   - 三个 `.well-known` 路径 GET 都是 200。
   - `/oauth/token` POST 一个空表单，回 400 和一个 OAuth 错误 JSON（`invalid_request` 或 `unsupported_grant_type`），不是 403 1010。
   - `/` 仍是 1010。
-  - `/c/xd-bridge/who` 仍是 401。
+  - `/c/example-channel/who` 仍是 401。
 - 停下：`/` 或其他路径被放开了，或 `/c/` 变了。
 - 怎么退：规则改回现在的表达式。
 
 **第 4 步：在 ChatGPT 里授权**
-- Plugins → 加号 → Add custom MCP server。地址填 `https://ccim.web3nomad.com/mcp`，认证选 OAuth，Create as a plugin。
-- 点连接后会跳到 `ccim.web3nomad.com` 的授权页。核对页面上写的回跳主机是 `chatgpt.com`；频道 `xd-bridge`、成员 `xd-dot` 是预填的。
+- Plugins → 加号 → Add custom MCP server。地址填 `https://relay.example.invalid/mcp`，认证选 OAuth，Create as a plugin。
+- 点连接后会跳到 `relay.example.invalid` 的授权页。核对页面上写的回跳主机是 `chatgpt.com`；频道 `example-channel`、成员 `example-member` 是预填的。
 - 填频道 secret（在 `~/workspace/misc/bridge/.env` 或 `~/.ccim/config.json` 里，只在这个页面里粘贴），点 Allow，会跳回 ChatGPT。
 - `wrangler tail` 里应依次看到：
   - `oauth_register`（只有走 DCR 才会出现；走 CIMD 不会有这条）
-  - `oauth_granted`（`member` 是 `xd-bridge/xd-dot`，第一次 `reused` 为 false）
+  - `oauth_granted`（`member` 是 `example-channel/example-member`，第一次 `reused` 为 false）
   - `oauth_token`
 - 停下：
   - 授权页显示 "Unknown client" 或 "Invalid redirect"。这说明 ChatGPT 的客户端文档或回跳不在预期里。记下 `wrangler tail` 里的请求，可能要改 `OAUTH_REDIRECT_HOSTS`。
-  - 页面提示 xd-dot 已被占用：先确认没有别的会话在用这个名字。
+  - 页面提示 example-member 已被占用：先确认没有别的会话在用这个名字。
   - ChatGPT 报授权失败。
   - 日志出现 `oauth_error`。
 - 怎么退：在 ChatGPT 里删掉这个连接；在管理页撤销（见下）。
 
 **第 5 步：Dot 只读调用**
 - 在 Dot（不是普通对话）里说：「用 CCIM 调 ccim_who」。
-- 应看到 `you = xd-dot`，`wrangler tail` 里有 `mcp_tool` 事件。
-- 停下：Dot 看到的身份不是 xd-dot，或调用报授权错误。
+- 应看到 `you = example-member`，`wrangler tail` 里有 `mcp_tool` 事件。
+- 停下：Dot 看到的身份不是 example-member，或调用报授权错误。
 - 怎么退：管理页撤销。
 
 **第 6 步：收**
-- 本会话执行 `ccim send xd-dot "验收消息"`。
+- 本会话执行 `ccim send example-member "验收消息"`。
 - Dot 调 `ccim_inbox` 应看到它。再调一次，还在（读不 ack）。
 - Dot 调 `ccim_ack`，再调 `ccim_inbox`，消失。
 - 停下：读一次就消失了（说明自动 ack 了），或 ack 不生效。
 
 **第 7 步：发**
-- 让 Dot 调 `ccim_send` 发给 `xd-m5-pro-claude`，本会话应收到，来源是 xd-dot。
+- 让 Dot 调 `ccim_send` 发给 `xd-m5-pro-claude`，本会话应收到，来源是 example-member。
 - 记下 Dot 每次写操作是否要 XD 点批准。
-- 停下：发出的消息来源不是 xd-dot，或发了两遍。
+- 停下：发出的消息来源不是 example-member，或发了两遍。
 
 **第 8 步：撤销演练**
-- 在 `https://ccim.web3nomad.com/oauth/manage` 里撤销（只点 Revoke），Dot 再调 `ccim_who` 应要求重新连接。
+- 在 `https://relay.example.invalid/oauth/manage` 里撤销（只点 Revoke），Dot 再调 `ccim_who` 应要求重新连接。
 - 重新授权，`oauth_granted` 的 `reused` 应为 true，撤销前的未 ack 消息还在。
 
 ### 授权和撤销的日常操作
 
 - **授权**：第 4 步。重新授权会作废同一成员之前的授权（同一时间只保留一个）。
-- **只撤销 Dot 的访问**：打开 `https://ccim.web3nomad.com/oauth/manage`，填频道和 secret，点 xd-dot 的 **Revoke**。成员和消息保留，下次授权直接复用。
-- **撤销并移出频道**：同一页面点 **Revoke and leave channel**。xd-dot 退出频道，它的未 ack 消息一起删掉。
+- **只撤销 Dot 的访问**：打开 `https://relay.example.invalid/oauth/manage`，填频道和 secret，点 example-member 的 **Revoke**。成员和消息保留，下次授权直接复用。
+- **撤销并移出频道**：同一页面点 **Revoke and leave channel**。example-member 退出频道，它的未 ack 消息一起删掉。
 - **ChatGPT 侧断开**：在 ChatGPT 里删掉连接。ChatGPT 会不会调用我们的 `/oauth/revoke` **未验证**，所以断开后再去管理页撤销一次。
 - **紧急全部停用**：`npx wrangler secret delete OAUTH_ENC_KEY`（第 4 节）。
 
