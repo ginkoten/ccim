@@ -4,6 +4,19 @@ import { pathToFileURL } from "node:url";
 const TOOLS = ["grok_inbox", "grok_reply", "grok_send", "grok_ack", "grok_status"];
 class CheckError extends Error {}
 
+export function adapterOptionsFromEnv(args = [], env = process.env) {
+  const names = { "--url-env": "CCIM_ADAPTER_MCP_URL", "--bearer-env": "CCIM_ADAPTER_MCP_BEARER" };
+  const seen = new Set();
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i], name = args[i + 1];
+    if (!Object.hasOwn(names, flag) || seen.has(flag) || typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      throw new CheckError("invalid_env_option");
+    seen.add(flag);
+    names[flag] = name;
+  }
+  return { url: env[names["--url-env"]], bearer: env[names["--bearer-env"]] };
+}
+
 export async function inspectAdapter({ url, bearer, request = fetch }) {
   let endpoint;
   try { endpoint = new URL(url); } catch { throw new CheckError("invalid_mcp_url"); }
@@ -46,7 +59,7 @@ export async function inspectAdapter({ url, bearer, request = fetch }) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const result = await inspectAdapter({ url: process.env.CCIM_ADAPTER_MCP_URL, bearer: process.env.CCIM_ADAPTER_MCP_BEARER });
+    const result = await inspectAdapter(adapterOptionsFromEnv(process.argv.slice(2)));
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     console.error(JSON.stringify({ error: error instanceof CheckError ? error.message : "mcp_check_failed", retried: false }));
