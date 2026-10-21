@@ -10,3 +10,6 @@
 - uncertain 禁止自动重发、换 clientId/part、清锁或换 namespace 绕过。先 grok_status 与接收方证据核对；没有足够证据则保留待人工处理。
 - 先保留处理结果，再 ack；ack 表示不再待收，不证明已经回复。已完成业务不因投递问题重跑。
 - 换 relay 必须交接未完成任务；编号只在所属 relay/频道内有效。旧队列保留不代表新队列能查询它。
+
+CLI 的旧 `--secret` 参数暂保留兼容，但 join/delete 使用时会在 stderr 提示弃用，且不回显值。
+新命令统一使用 `--secret-file` 或已有私密配置；提示不能消除旧命令已经进入 shell 历史/进程参数的风险。

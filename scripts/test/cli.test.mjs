@@ -23,11 +23,11 @@ async function fixture(run) {
   const relay = `http://127.0.0.1:${server.address().port}`;
   const command = (args, extra = {}) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, CCIM_HOME: home, CCIM_SESSION: "isolated-test", CCIM_HOST: "codex", CCIM_RELAY: "", ...extra }, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    child.stdout.on("data", d => output += d);
-    child.stderr.on("data", d => output += d);
+    let stdout = "", stderr = "";
+    child.stdout.on("data", d => stdout += d);
+    child.stderr.on("data", d => stderr += d);
     child.on("error", reject);
-    child.on("exit", code => resolve({ code, output }));
+    child.on("exit", code => resolve({ code, stdout, stderr, output: stdout + stderr }));
   });
   try { await run({ home, relay, requests, command, rejectJoin: () => { status = 409; } }); }
   finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(home, { recursive: true, force: true }); }
@@ -83,3 +83,18 @@ test("CLI delete accepts a secret file without echoing it (isolated mock only)",
   assert.equal(requests[0].secret, secret);
   assert.ok(!result.output.includes(secret));
 }));
+
+
+for (const operation of ["join", "delete"]) {
+  test(`CLI ${operation} warns on legacy secret arguments without exposing credentials`, () => fixture(async ({ relay, requests, command }) => {
+    const secret = "test-only-legacy-secret";
+    const target = operation === "join" ? "example/member" : "example";
+    const result = await command([operation, target, "--secret", secret], { CCIM_RELAY: relay });
+    assert.equal(result.code, 0);
+    assert.equal(requests[0].secret, secret);
+    assert.match(result.stderr, /--secret is deprecated/);
+    assert.match(result.stderr, /--secret-file/);
+    assert.doesNotMatch(result.stdout, /deprecated/);
+    assert.ok(!result.output.includes(secret));
+  }));
+}
