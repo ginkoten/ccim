@@ -173,7 +173,7 @@ const HANDLERS = {
       if (rows.length >= limit) break;
     }
     const missing = wanted ? [...wanted].filter((i) => !rows.some((r) => r.id === i)) : [];
-    if (!rows.length) return ok(missing.length ? `Not in the queue (already acked or never existed): ${missing.join(", ")}` : "No unacknowledged messages for grok.", { messages: [], missing });
+    if (!rows.length) return ok(missing.length ? `Not in the current relay queue: ${missing.join(", ")}. A message may have been acknowledged or belong to a previous relay. This does not prove it was never received. Preserve completed work and check with the operator before rerunning a task.` : "No unacknowledged messages for grok.", { messages: [], missing });
     const lines = rows.map((r) => `--- #${r.id} from ${r.from}${r.to === "*" ? " (to everyone)" : ""} [${r.class}, hop ${r.hop}, ${r.stage_cn}]\n${r.text}`);
     lines.push("", UNTRUSTED, `Reply with grok_reply(reply_to_id), then grok_ack the ids you handled.${missing.length ? ` Not in the queue: ${missing.join(", ")}.` : ""}`);
     return ok(lines.join("\n"), { messages: rows, missing });
@@ -188,10 +188,19 @@ const HANDLERS = {
     let meta = await getMeta(ctx, id);
     if (!meta) {
       const peek = await ctx.relay.peek();
-      if (peek.ok) await ingest(ctx, peek.messages.filter((m) => m.id === id));
+      if (!peek.ok) return toolError(
+        `Could not check message #${id} on the current relay. No reply was submitted. Preserve completed work and check relay connectivity with the operator.`,
+        { error: "relay_lookup_failed", status: peek.status, reply_submitted: false, retry_allowed: false,
+          check: { tool: "grok_status", arguments: { ids: [id] } } },
+      );
+      await ingest(ctx, peek.messages.filter((m) => m.id === id));
       meta = await getMeta(ctx, id);
     }
-    if (!meta) return toolError(`Message #${id} was never received by grok, so there is nobody to reply to.`);
+    if (!meta) return toolError(
+      `Message #${id} was not found in the current relay queue or adapter state. It may belong to a previous relay; this does not prove it was never received. No reply was submitted. Preserve completed work, do not rerun the task or substitute another message id, and ask the operator to reconcile the relay migration.`,
+      { error: "message_not_found_in_current_relay", reply_submitted: false, retry_allowed: false,
+        check: { tool: "grok_status", arguments: { ids: [id] } } },
+    );
     if (meta.cls === "own" || meta.from === ctx.cfg.handle) return toolError("You cannot reply to your own message.");
     if (meta.hop >= ctx.cfg.maxHop) return toolError(`Message #${id} is already at hop ${meta.hop} (limit ${ctx.cfg.maxHop}). Do not reply; tell your user instead.`);
 
@@ -221,9 +230,11 @@ const HANDLERS = {
     const metas = args.ids ? (await Promise.all(args.ids.map((i) => getMeta(ctx, i)))).filter(Boolean) : await recentMetas(ctx);
     const s = await summary(ctx);
     const rows = await Promise.all(metas.map((meta) => view(meta, ctx)));
+    const missing = args.ids ? args.ids.filter((id) => !rows.some((row) => row.id === id)) : [];
     const lines = rows.map((r) => `#${r.id} from ${r.from} [${r.class}] ${r.stage_cn}${r.reply_uncertain ? "；回复状态不确定：不要重发或换 part，请与接收方核对" : ""}${r.gone ? " (acked elsewhere)" : ""}${r.wake.failed ? " (wake failed)" : ""}${r.wake.deferred ? ` (deferred: ${r.wake.deferred})` : ""}`);
     lines.unshift(`wakes today ${s.wakes_today}/${s.daily_cap}; open ${s.open}; last poll ${s.poll ? `${s.poll.ok ? "ok" : `failed: ${s.poll.error}`}` : "none yet"}`);
-    return ok(lines.join("\n"), { summary: s, messages: rows });
+    if (missing.length) lines.push(`No record in the current adapter state: ${missing.join(", ")}. Previous relay records are not searched; missing does not mean deleted or never received.`);
+    return ok(lines.join("\n"), { summary: s, messages: rows, missing });
   },
 };
 

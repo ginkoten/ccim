@@ -66,6 +66,19 @@ test("grok_reply refuses unknown ids, own messages and hop-limited messages", as
   assert.equal(h.relay.queues.get("claude").size, 0);
 });
 
+test("a failed relay lookup is not reported as a missing message or a submitted reply", async () => {
+  const h = harness();
+  h.relay.down = true;
+  const reply = await h.mcp("grok_reply", { reply_to_id: 27, text: "completed result" });
+  assert.equal(reply.isError, true);
+  assert.equal(reply.structuredContent.error, "relay_lookup_failed");
+  assert.equal(reply.structuredContent.reply_submitted, false);
+  assert.equal(reply.structuredContent.retry_allowed, false);
+  assert.doesNotMatch(reply.content[0].text, /never received|not found/);
+  assert.equal(h.relay.calls.filter((call) => call.op === "send").length, 0);
+  assert.equal(h.relay.queues.get("neo-codex").size, 0);
+});
+
 test("reply to a hop-1 message is tagged hop 2, which the other side's adapter would skip", async () => {
   const h = harness();
   const id = h.relay.deliver("claude", "grok", "answer this [hop:1]");
