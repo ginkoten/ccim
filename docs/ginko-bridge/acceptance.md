@@ -156,3 +156,24 @@ adapter 占位配置 dry-run 通过（43.77 KiB / gzip 12.80 KiB），未上传�
 只读验收：五个 MCP 工具可发现；grok_send 的 hop schema 不再包含 maximum；grok_status 的 hop_limit、sender_limit、daily_cap、send_limit、send_daily_cap 均为 null；无 Bearer 请求仍返回401。部署后的 cron 已成功轮询。部署前后最近20条消息的阶段/回复记录一致，既有每日唤醒计数未重置。
 
 `/health` 返回200；项目没有 `/status` 路由，仍返回404及 not_found，业务状态通过 MCP grok_status 查询。上述结果证明版本生效与状态连续性，不冒充真实 Grok 高 hop 发送的端到端验收。
+## 多项目上线执行记录（部分完成，2026-10-21）
+
+本轮已有 Ginko 对安装、规则、频道/成员、四项秘密、推送合并和部署的直接授权；不再等待重复授权。
+记录对应 #74（GinkoAI 独立桥频道）、#79（接收端隔离与令牌保存）和 #81（编号附简短说明）。
+
+- 已安装独立接收目录、CCIM_HOME、四个运行文件和两份非秘密启动配置；Codex/Claude 预检通过。
+- 两项目 AGENTS.md / CLAUDE.md 的编号说明规则已同步；工作站仅增加该条，未处理业务资料。
+- Claude 缓存中的四个 ccim hooks 已有代理开关，核对后未改；原工作站监听进程未操作。
+- Codex 新客户端启动到四个 hooks 的信任提示，未自动接受。Claude 新客户端启动后返回 API 401，未改变认证或切换账号。
+- 专用 MCP_BEARER 已生成、私密保存并通过 stdin 写入指定 Worker；只读 secret 清单确认该名称存在。
+  首次写入创建了占位 Worker；这不代表 adapter 正式部署或 MCP 可用。
+- GinkoAI Webhook URL/key 未在本轮指定环境和项目私有文件中找到。没有复用工作站 Webhook，也没有读取 Cloudflare 不可导出的秘密。
+- 频道/成员尚未创建；codex/claude 等待各自真实接收会话首次 join，grok provision 等待频道存在。
+  未导出客户端 token、未读取内部会话存储，未生成游离 codex/claude token。
+- Git push 遇到 GitHub 443 TLS 中断，没有重复推送、强推、创建 PR 或更新远端 main。
+- 上游 PR #5（通用 adapter）head 仍为 `d16571b`；保留逐项同步计划，未整批移植或覆盖其默认策略。
+
+本轮只增加文档，复用此前 154 项和新增 5 项离线测试、三个 dry-run 证据。
+正式 adapter 部署、cron、间隔至少一分钟的两次 MCP 检查、poll.at 推进及真实消息隔离验收均未完成。
+当前接口提供 poll.at 时间戳，没有累计 poll 计数；不能把 wakes_today 作为轮询次数。
+本执行会话未发送桥回报，统一由父接收会话交付；本机无秘密的执行报告保存在忽略的 artifacts 中。
