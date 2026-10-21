@@ -41,7 +41,7 @@ before(async () => {
   CALLBACK = `http://localhost:${CLIENT_PORT}/callback`;
 
   persist = mkdtempSync(join(tmpdir(), "ccim-flow-"));
-  const vars = { OAUTH_ISSUER: BASE, MCP_ALLOWED_BINDINGS: "xd-bridge/xd-dot", OAUTH_REDIRECT_HOSTS: "localhost", OAUTH_CIMD: "on", OAUTH_ENC_KEY: ENC_KEY };
+  const vars = { OAUTH_ISSUER: BASE, MCP_ALLOWED_BINDINGS: "example-channel/example-member", OAUTH_REDIRECT_HOSTS: "localhost", OAUTH_CIMD: "on", OAUTH_ENC_KEY: ENC_KEY };
   relay = spawn(join(RELAY_DIR, "node_modules", ".bin", "wrangler"), ["dev", "--local", "--port", String(PORT), "--persist-to", persist, "--show-interactive-dev-session=false", ...Object.entries(vars).flatMap(([k, v]) => ["--var", `${k}:${v}`])], { cwd: RELAY_DIR, stdio: ["ignore", "pipe", "pipe"] });
   relay.stdout.on("data", (d) => (relayLog += d));
   relay.stderr.on("data", (d) => (relayLog += d));
@@ -81,7 +81,7 @@ async function http(method, path, { body, form, token, secret, headers = {} } = 
   return { status: res.status, headers: res.headers, text, data };
 }
 
-const channel = (method, op, opts) => http(method, `/c/xd-bridge/${op}`, opts);
+const channel = (method, op, opts) => http(method, `/c/example-channel/${op}`, opts);
 
 let rpcId = 0;
 async function mcp(method, params, token) {
@@ -102,13 +102,13 @@ function authorizeUrl(overrides = {}) {
 }
 
 // Opens the authorization page and submits it, the way XD would in the browser.
-async function authorize({ member = "xd-dot", secret = SECRET, clientId = CIMD, scope } = {}) {
+async function authorize({ member = "example-member", secret = SECRET, clientId = CIMD, scope } = {}) {
   const { verifier, challenge } = pkce();
   const state = "st-" + randomBytes(6).toString("hex");
   const page = await http("GET", authorizeUrl({ client_id: clientId, code_challenge: challenge, state, ...(scope && { scope }) }));
   assert.equal(page.status, 200, page.text);
   const request = page.text.match(/name="request" value="([0-9a-f]{32})"/)[1];
-  const posted = await http("POST", "/oauth/authorize", { form: { request, channel: "xd-bridge", member, secret, action: "allow" } });
+  const posted = await http("POST", "/oauth/authorize", { form: { request, channel: "example-channel", member, secret, action: "allow" } });
   if (posted.status !== 302) return { page: posted, request };
   const loc = new URL(posted.headers.get("location"));
   return { loc, state, verifier, clientId, code: loc.searchParams.get("code") };
@@ -201,11 +201,11 @@ test("authorization page: wrong secret, binding not allowed, never takes over a 
   const other = await authorize({ member: "alice" });
   assert.match(other.page.text, /not enabled/);
 
-  // Someone joins as xd-dot with the CLI first: authorization must refuse, and their token must keep working.
-  const cli = await channel("POST", "join", { body: { handle: "xd-dot" }, secret: SECRET });
+  // Someone joins as example-member with the CLI first: authorization must refuse, and their token must keep working.
+  const cli = await channel("POST", "join", { body: { handle: "example-member" }, secret: SECRET });
   const taken = await authorize();
   assert.match(taken.page.text, /already used by another session/);
-  assert.equal((await channel("GET", "who", { token: cli.data.token })).data.you, "xd-dot");
+  assert.equal((await channel("GET", "who", { token: cli.data.token })).data.you, "example-member");
   await channel("POST", "leave", { body: {}, token: cli.data.token });
 });
 
@@ -214,10 +214,10 @@ test("too many failed attempts end the request", async () => {
   const page = await http("GET", authorizeUrl({ code_challenge: challenge, state: "s1" }));
   const request = page.text.match(/name="request" value="([0-9a-f]{32})"/)[1];
   let last;
-  for (let i = 0; i < 5; i++) last = await http("POST", "/oauth/authorize", { form: { request, channel: "xd-bridge", member: "xd-dot", secret: "y".repeat(20), action: "allow" } });
+  for (let i = 0; i < 5; i++) last = await http("POST", "/oauth/authorize", { form: { request, channel: "example-channel", member: "example-member", secret: "y".repeat(20), action: "allow" } });
   assert.equal(last.status, 302);
   assert.equal(new URL(last.headers.get("location")).searchParams.get("error"), "access_denied");
-  const again = await http("POST", "/oauth/authorize", { form: { request, channel: "xd-bridge", member: "xd-dot", secret: SECRET, action: "allow" } });
+  const again = await http("POST", "/oauth/authorize", { form: { request, channel: "example-channel", member: "example-member", secret: SECRET, action: "allow" } });
   assert.equal(again.status, 400);
 });
 
@@ -259,7 +259,7 @@ test("code exchange: PKCE, single use, redirect and client must match", async ()
   assert.equal(t.data.scope, "ccim:read ccim:write");
   assert.match(t.data.access_token, /^cca_/);
   assert.match(t.data.refresh_token, /^ccr_/);
-  assert.equal((await tool("ccim_who", {}, t.data.access_token)).structuredContent.you, "xd-dot");
+  assert.equal((await tool("ccim_who", {}, t.data.access_token)).structuredContent.you, "example-member");
 
   // Reusing a code revokes what it produced.
   assert.equal((await exchange(e)).data.error, "invalid_grant");
@@ -270,9 +270,9 @@ test("code exchange: PKCE, single use, redirect and client must match", async ()
 
 test("ccim_who reports the bound member and ignores identity arguments", async () => {
   const who = await tool("ccim_who", {}, tokens.access_token);
-  assert.equal(who.structuredContent.you, "xd-dot");
-  assert.equal(who.structuredContent.channel, "xd-bridge");
-  assert.deepEqual(who.structuredContent.members.map((m) => m.handle).sort(), ["alice", "xd-dot"]);
+  assert.equal(who.structuredContent.you, "example-member");
+  assert.equal(who.structuredContent.channel, "example-channel");
+  assert.deepEqual(who.structuredContent.members.map((m) => m.handle).sort(), ["alice", "example-member"]);
 
   for (const args of [{ member: "alice" }, { from: "alice" }, { channel: "other" }]) {
     const r = await tool("ccim_who", args, tokens.access_token);
@@ -296,7 +296,7 @@ test("ccim_send: delivered, retries with the same client_msg_id are not sent twi
 
   const inbox = (await channel("GET", "inbox", { token: alice })).data.messages;
   assert.equal(inbox.length, 1);
-  assert.equal(inbox[0].from, "xd-dot");
+  assert.equal(inbox[0].from, "example-member");
   assert.equal(inbox[0].text, "hello from dot");
   await channel("POST", "ack", { body: { ids: [inbox[0].id] }, token: alice });
 
@@ -304,7 +304,7 @@ test("ccim_send: delivered, retries with the same client_msg_id are not sent twi
   assert.equal(reused.isError, true);
   assert.match(reused.content[0].text, /already used for a different message/);
 
-  assert.equal((await tool("ccim_send", { to: "xd-dot", text: "me", client_msg_id: "self-0001" }, tokens.access_token)).isError, true);
+  assert.equal((await tool("ccim_send", { to: "example-member", text: "me", client_msg_id: "self-0001" }, tokens.access_token)).isError, true);
   const unknown = await tool("ccim_send", { to: "bob", text: "x", client_msg_id: "bob-00001" }, tokens.access_token);
   assert.match(unknown.content[0].text, /No "bob"/);
   assert.equal((await tool("ccim_send", { to: "alice", text: "x" }, tokens.access_token)).isError, true);
@@ -312,7 +312,7 @@ test("ccim_send: delivered, retries with the same client_msg_id are not sent twi
 
 test("ccim_inbox reads without acking; ccim_ack removes", async () => {
   const ids = [];
-  for (const text of ["one", "two", "three"]) ids.push((await channel("POST", "send", { body: { to: "xd-dot", text }, token: alice })).data.id);
+  for (const text of ["one", "two", "three"]) ids.push((await channel("POST", "send", { body: { to: "example-member", text }, token: alice })).data.id);
 
   const a = await tool("ccim_inbox", {}, tokens.access_token);
   assert.deepEqual(a.structuredContent.messages.map((m) => m.text), ["one", "two", "three"]);
@@ -376,7 +376,7 @@ test("refresh rotates; reusing an old refresh token ends the grant", async () =>
   const r1 = await http("POST", "/oauth/token", { form: { grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: CIMD, resource: BASE } });
   assert.equal(r1.status, 200);
   assert.notEqual(r1.data.refresh_token, tokens.refresh_token);
-  assert.equal((await tool("ccim_who", {}, r1.data.access_token)).structuredContent.you, "xd-dot");
+  assert.equal((await tool("ccim_who", {}, r1.data.access_token)).structuredContent.you, "example-member");
 
   const wrongClient = await http("POST", "/oauth/token", { form: { grant_type: "refresh_token", refresh_token: r1.data.refresh_token, client_id: "other" } });
   assert.equal(wrongClient.data.error, "invalid_grant");
@@ -390,7 +390,7 @@ test("refresh rotates; reusing an old refresh token ends the grant", async () =>
 });
 
 test("reconnecting reuses the member: no rejoin, queued messages kept", async () => {
-  await channel("POST", "send", { body: { to: "xd-dot", text: "while away" }, token: alice });
+  await channel("POST", "send", { body: { to: "example-member", text: "while away" }, token: alice });
   tokens = await connect();
   const inbox = await tool("ccim_inbox", {}, tokens.access_token);
   assert.deepEqual(inbox.structuredContent.messages.map((m) => m.text), ["while away"]);
@@ -401,7 +401,7 @@ test("reconnecting reuses the member: no rejoin, queued messages kept", async ()
 test("revocation endpoint ends the grant", async () => {
   const other = await http("POST", "/oauth/revoke", { form: { token: tokens.access_token, client_id: "someone-else" } });
   assert.equal(other.status, 200);
-  assert.equal((await tool("ccim_who", {}, tokens.access_token)).structuredContent?.you, "xd-dot", "another client cannot revoke");
+  assert.equal((await tool("ccim_who", {}, tokens.access_token)).structuredContent?.you, "example-member", "another client cannot revoke");
 
   assert.equal((await http("POST", "/oauth/revoke", { form: { token: tokens.refresh_token, client_id: CIMD } })).status, 200);
   assert.equal((await mcp("tools/list", {}, tokens.access_token)).status, 401);
@@ -410,28 +410,28 @@ test("revocation endpoint ends the grant", async () => {
 
 test("member taken over by a CLI join: the grant stops working, the CLI member is untouched", async () => {
   tokens = await connect();
-  const cli = await channel("POST", "join", { body: { handle: "xd-dot" }, secret: SECRET });
+  const cli = await channel("POST", "join", { body: { handle: "example-member" }, secret: SECRET });
   const r = await tool("ccim_who", {}, tokens.access_token);
   assert.equal(r.isError, true);
   assert.match(r._meta["mcp/www_authenticate"][0], /invalid_token/);
   assert.equal((await mcp("tools/list", {}, tokens.access_token)).status, 401);
-  assert.equal((await channel("GET", "who", { token: cli.data.token })).data.you, "xd-dot");
+  assert.equal((await channel("GET", "who", { token: cli.data.token })).data.you, "example-member");
   await channel("POST", "leave", { body: {}, token: cli.data.token });
 });
 
 test("manage page: wrong secret refused; revoke and leave removes the member", async () => {
   tokens = await connect();
-  assert.match((await http("POST", "/oauth/manage", { form: { channel: "xd-bridge", secret: "z".repeat(20) } })).text, /Wrong channel or secret/);
-  const list = await http("POST", "/oauth/manage", { form: { channel: "xd-bridge", secret: SECRET } });
-  assert.match(list.text, /<b>xd-dot<\/b>: connected/);
+  assert.match((await http("POST", "/oauth/manage", { form: { channel: "example-channel", secret: "z".repeat(20) } })).text, /Wrong channel or secret/);
+  const list = await http("POST", "/oauth/manage", { form: { channel: "example-channel", secret: SECRET } });
+  assert.match(list.text, /<b>example-member<\/b>: connected/);
 
-  const revoked = await http("POST", "/oauth/manage", { form: { channel: "xd-bridge", secret: SECRET, member: "xd-dot", action: "revoke" } });
+  const revoked = await http("POST", "/oauth/manage", { form: { channel: "example-channel", secret: SECRET, member: "example-member", action: "revoke" } });
   assert.match(revoked.text, /no active connection/);
   assert.equal((await mcp("tools/list", {}, tokens.access_token)).status, 401);
-  assert.ok((await channel("GET", "who", { token: alice })).data.members.some((m) => m.handle === "xd-dot"), "plain revoke keeps the member");
+  assert.ok((await channel("GET", "who", { token: alice })).data.members.some((m) => m.handle === "example-member"), "plain revoke keeps the member");
 
-  await http("POST", "/oauth/manage", { form: { channel: "xd-bridge", secret: SECRET, member: "xd-dot", action: "revoke_leave" } });
-  assert.ok(!(await channel("GET", "who", { token: alice })).data.members.some((m) => m.handle === "xd-dot"));
+  await http("POST", "/oauth/manage", { form: { channel: "example-channel", secret: SECRET, member: "example-member", action: "revoke_leave" } });
+  assert.ok(!(await channel("GET", "who", { token: alice })).data.members.some((m) => m.handle === "example-member"));
 });
 
 test("dynamic client registration as the fallback", async () => {
@@ -442,7 +442,7 @@ test("dynamic client registration as the fallback", async () => {
   const reg = await http("POST", "/oauth/register", { body: { client_name: "DCR client", redirect_uris: [CALLBACK] } });
   assert.equal(reg.status, 201);
   const t = await connect({ clientId: reg.data.client_id });
-  assert.equal((await tool("ccim_who", {}, t.access_token)).structuredContent.you, "xd-dot");
+  assert.equal((await tool("ccim_who", {}, t.access_token)).structuredContent.you, "example-member");
 });
 
 test("authorization page headers", async () => {
@@ -467,7 +467,7 @@ test("existing channel API unchanged: newest join still takes over, CLI works en
   try {
     const env = { ...process.env, CCIM_HOME: home, CCIM_SESSION: "flow-test", CCIM_HOST: "claude", CCIM_RELAY: BASE };
     const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { env, encoding: "utf8" });
-    assert.equal(run("join", "xd-bridge/erin", "--secret", SECRET).status, 0);
+    assert.equal(run("join", "example-channel/erin", "--secret", SECRET).status, 0);
     const sent = run("send", "alice", "from the cli");
     assert.equal(sent.status, 0, sent.stderr);
     assert.match(sent.stdout, /-> alice: offline, queued/);

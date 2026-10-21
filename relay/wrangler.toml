@@ -1,8 +1,8 @@
-name = "ccim-relay"
+# Copy to wrangler.local.toml and choose your own Worker name.
+name = "example-ccim-relay"
 main = "src/index.js"
 compatibility_date = "2026-01-01"
 workers_dev = true
-routes = [{ pattern = "ccim.web3nomad.com", custom_domain = true }]
 
 [[durable_objects.bindings]]
 name = "CHANNEL"
@@ -27,6 +27,8 @@ new_sqlite_classes = ["Auth"]
 # Remote MCP + OAuth. OAuth and the four ccim_* tools stay off until the OAUTH_ENC_KEY secret is set
 # (32 random bytes, base64): `wrangler secret put OAUTH_ENC_KEY`.
 [vars]
-OAUTH_ISSUER = "https://ccim.web3nomad.com"
-MCP_ALLOWED_BINDINGS = "xd-bridge/xd-dot"
-OAUTH_REDIRECT_HOSTS = "chatgpt.com"
+LOOP_GUARD_MAX = "256"
+# Optional OAuth only. Keep disabled until the whole configuration is ready.
+# OAUTH_ISSUER = "https://relay.example.invalid"
+# MCP_ALLOWED_BINDINGS = "example-channel/example-member"
+# OAUTH_REDIRECT_HOSTS = "client.example.invalid"

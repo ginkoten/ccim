@@ -4,7 +4,7 @@ import { validateCimd, redirectAllowed, grantedScope, serverMetadata } from "../
 import { settings } from "../src/util.js";
 import { handleMcp } from "../src/mcp.js";
 
-const prod = { issuer: "https://ccim.web3nomad.com", redirectHosts: ["chatgpt.com"] };
+const prod = { issuer: "https://relay.example.invalid", redirectHosts: ["chatgpt.com"] };
 const KEY = Buffer.alloc(32, 7).toString("base64");
 
 test("redirects: https on an allowed host only, exact strings", () => {
@@ -39,16 +39,16 @@ test("scopes: unknown ones dropped, none means all", () => {
 });
 
 test("settings: OAuth is off unless issuer, a 32-byte key, the AUTH binding and a binding are all present", () => {
-  const env = { OAUTH_ISSUER: "https://ccim.web3nomad.com/", OAUTH_ENC_KEY: KEY, MCP_ALLOWED_BINDINGS: "xd-bridge/xd-dot", OAUTH_REDIRECT_HOSTS: "chatgpt.com", AUTH: {} };
+  const env = { OAUTH_ISSUER: "https://relay.example.invalid/", OAUTH_ENC_KEY: KEY, MCP_ALLOWED_BINDINGS: "example-channel/example-member", OAUTH_REDIRECT_HOSTS: "chatgpt.com", AUTH: {} };
   const s = settings(env);
   assert.equal(s.ready, true);
-  assert.equal(s.issuer, "https://ccim.web3nomad.com");
-  assert.deepEqual(s.resources, ["https://ccim.web3nomad.com", "https://ccim.web3nomad.com/mcp"]);
-  assert.deepEqual(s.bindings, [{ channel: "xd-bridge", member: "xd-dot" }]);
+  assert.equal(s.issuer, "https://relay.example.invalid");
+  assert.deepEqual(s.resources, ["https://relay.example.invalid", "https://relay.example.invalid/mcp"]);
+  assert.deepEqual(s.bindings, [{ channel: "example-channel", member: "example-member" }]);
   assert.equal(settings({ ...env, OAUTH_ENC_KEY: undefined }).ready, false);
   assert.equal(settings({ ...env, OAUTH_ENC_KEY: Buffer.alloc(16).toString("base64") }).ready, false);
   assert.equal(settings({ ...env, AUTH: undefined }).ready, false);
-  assert.equal(settings({ ...env, MCP_ALLOWED_BINDINGS: "xd-bridge/xd-dot/x, Bad/Name" }).ready, false);
+  assert.equal(settings({ ...env, MCP_ALLOWED_BINDINGS: "example-channel/example-member/x, Bad/Name" }).ready, false);
 });
 
 test("authorization server metadata matches what OpenAI's docs require", () => {
@@ -61,7 +61,7 @@ test("authorization server metadata matches what OpenAI's docs require", () => {
 });
 
 test("CIMD is off unless OAUTH_CIMD=on, so ChatGPT falls back to DCR", () => {
-  const env = { OAUTH_ISSUER: "https://ccim.web3nomad.com", OAUTH_ENC_KEY: KEY, MCP_ALLOWED_BINDINGS: "xd-bridge/xd-dot", OAUTH_REDIRECT_HOSTS: "chatgpt.com", AUTH: {} };
+  const env = { OAUTH_ISSUER: "https://relay.example.invalid", OAUTH_ENC_KEY: KEY, MCP_ALLOWED_BINDINGS: "example-channel/example-member", OAUTH_REDIRECT_HOSTS: "chatgpt.com", AUTH: {} };
   assert.equal(serverMetadata(settings(env)).client_id_metadata_document_supported, false);
   assert.equal(serverMetadata(settings({ ...env, OAUTH_CIMD: "yes" })).client_id_metadata_document_supported, false);
   assert.equal(serverMetadata(settings({ ...env, OAUTH_CIMD: "on" })).client_id_metadata_document_supported, true);
@@ -86,7 +86,7 @@ test("ChatGPT's real client document (shape as fetched 2026-10-14, callback id r
 });
 
 test("with OAuth off, the ccim_* tools are hidden and refuse, the probe still works", async () => {
-  const env = { OAUTH_ISSUER: "https://ccim.web3nomad.com", MCP_ALLOWED_BINDINGS: "xd-bridge/xd-dot" };
+  const env = { OAUTH_ISSUER: "https://relay.example.invalid", MCP_ALLOWED_BINDINGS: "example-channel/example-member" };
   const post = async (body) => (await handleMcp(new Request("https://x/mcp", { method: "POST", body: JSON.stringify(body) }), env)).json();
   assert.deepEqual((await post({ jsonrpc: "2.0", id: 1, method: "tools/list" })).result.tools.map((t) => t.name), ["ccim_probe"]);
   assert.equal((await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ccim_send", arguments: {} } })).error.code, -32602);
