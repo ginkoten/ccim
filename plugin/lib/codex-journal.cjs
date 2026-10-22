@@ -15,6 +15,8 @@ function atomicJson(file, value) {
 }
 function valid(journal) {
   return journal?.version === 2 && typeof journal.quarantined === "boolean" &&
+    (journal.recoveryIds === undefined || Array.isArray(journal.recoveryIds) &&
+      journal.recoveryIds.every(id => Number.isSafeInteger(id) && id > 0)) &&
     journal.entries && !Array.isArray(journal.entries) && typeof journal.entries === "object" &&
     Object.values(journal.entries).every(e => e && STATES.has(e.state) &&
       typeof e.deliveryId === "string" && Number.isInteger(e.attempts) && e.attempts >= 0 &&
@@ -41,14 +43,28 @@ function openJournal(directory, s, log) {
   atomicJson(file, data);
   return { data, save: () => atomicJson(file, data) };
 }
+async function snapshotRecovery(journal, s, api, log) {
+  const { data, save } = journal;
+  if (!data.quarantined || data.recoveryIds !== undefined) return;
+  // This HTTP endpoint only reads pending IDs, including focused messages; unlike CLI inbox it never ACKs.
+  const response = await api(s, "GET", "inbox?all=1");
+  if (response?.status !== 200 || !Array.isArray(response.messages) ||
+      !response.messages.every(m => Number.isSafeInteger(m.id) && m.id > 0))
+    throw Object.assign(new Error("recovery_snapshot_failed"), { code: "recovery_snapshot_failed" });
+  data.recoveryIds = [...new Set(response.messages.map(m => m.id))];
+  save(); // Persist the finite boundary before any queue operation; never expand it on restart.
+  log("recovery_snapshot", { count: data.recoveryIds.length });
+}
 function deliveryStatus(directory, s) {
   const file = journalPath(directory, s);
   if (!fs.existsSync(file)) return { state: "no_current_journal", legacy: fs.existsSync(path.join(directory, "delivery.json")) };
   let data;
   try { data = JSON.parse(fs.readFileSync(file, "utf8")); if (!valid(data)) throw new Error(); }
   catch { return { state: "journal_corrupt" }; }
-  return { state: data.quarantined ? "reconciliation_only" : "ready",
+  return { generation: generation(s), state: data.quarantined ?
+    data.recoveryIds === undefined ? "recovery_snapshot_required" : "scoped_recovery" : "ready",
+    recoveryIds: data.recoveryIds || [],
     pending: Object.entries(data.entries).filter(([, e]) => e.state !== "acked").map(([id, e]) =>
       ({ messageId: Number(id), state: e.state, attempts: e.attempts, nextAttemptAt: e.nextAttemptAt })) };
 }
-module.exports = { generation, journalPath, openJournal, deliveryStatus };
+module.exports = { generation, journalPath, openJournal, snapshotRecovery, deliveryStatus, valid, atomicJson };

@@ -4,13 +4,13 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { submit } = require("./codex-queue.cjs");
 const { acquire, runtimeDirectory } = require("./codex-ownership.cjs");
-const { generation, openJournal } = require("./codex-journal.cjs");
+const { generation, openJournal, snapshotRecovery } = require("./codex-journal.cjs");
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const hash = text => crypto.createHash("sha256").update(text).digest("hex");
 const ERROR_CODES = new Set(["EISDIR", "EACCES", "EPERM", "ENOSPC", "ENOENT", "EIO", "EROFS", "EMFILE", "ENFILE",
   "EXDEV", "EEXIST", "ENOTDIR", "binding_incomplete", "lock_busy", "lock_corrupt", "lock_history_limit",
-  "owner_identity_unknown", "rpc_response_too_large", "rpc_timeout", "rpc_unavailable"]);
+  "owner_identity_unknown", "rpc_response_too_large", "rpc_timeout", "rpc_unavailable", "recovery_snapshot_failed"]);
 const errorCode = error => ERROR_CODES.has(error?.code) ? error.code : "unclassified";
 
 function reconnectSchedule(delay, openMs, random = Math.random) {
@@ -35,9 +35,12 @@ function deliveryId(channel, id) {
 }
 
 function createDelivery({ directory, sessionId, s, api, format, log, env, queue = submit, now = Date.now }) {
-  const { data, save } = openJournal(directory, s, log), journal = data.entries;
+  const opened = openJournal(directory, s, log), { data, save } = opened, journal = data.entries;
   const epoch = generation(s);
-  return async message => {
+  let preparation;
+  const prepare = () => preparation ||= snapshotRecovery(opened, s, api, log);
+  const deliver = async message => {
+    await prepare();
     const key = String(message.id);
     const id = deliveryId(epoch, message.id);
     const previous = journal[key];
@@ -45,7 +48,8 @@ function createDelivery({ directory, sessionId, s, api, format, log, env, queue 
     if (previous?.state === "stuck") return "stuck";
     if (previous?.nextAttemptAt > now()) return previous.state;
     if (previous?.state !== "accepted") {
-      const reconcileOnly = data.quarantined || previous?.state === "uncertain";
+      const reconcileOnly = previous?.state === "uncertain" ||
+        !previous && (data.recoveryIds || []).includes(message.id);
       const attempts = (previous?.attempts || 0) + 1;
       journal[key] = { state: "uncertain", deliveryId: id, attempts, nextAttemptAt: 0, updatedAt: now() };
       save(); // Crash after queue acceptance must not turn into an unconditional re-send.
@@ -66,6 +70,8 @@ function createDelivery({ directory, sessionId, s, api, format, log, env, queue 
     log("acknowledged", { messageId: message.id, deliveryId: id });
     return "acked";
   };
+  deliver.prepare = prepare;
+  return deliver;
 }
 
 function connection({ s, onMessage, log, sockets, WebSocketImpl = WebSocket, connectTimeout = 15000, heartbeatMs = 30000 }) {
@@ -138,6 +144,7 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
   let timer;
   try {
     deliver = createDelivery({ directory, sessionId, s, api, format, log, env });
+    await deliver.prepare();
     writeSession({ ...s, listenerPid: process.pid, listenerIdentity: owner.identity });
     log("started", { reason: "reliable_v1" });
     timer = setInterval(() => { void drain(); }, 15000);

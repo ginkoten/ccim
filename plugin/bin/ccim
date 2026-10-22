@@ -310,6 +310,12 @@ const commands = {
     console.log(`[ccim] deleted channel "${channel}". All members were disconnected and its queued messages are gone.`);
   },
 
+  reliable(args) {
+    const { parseResolution, resolveDelivery } = require("../lib/codex-resolve.cjs");
+    const resolution = parseResolution(args);
+    console.log(JSON.stringify(resolveDelivery({ s: needSession(), sessionId, sessionFile: sessionFile(), resolution })));
+  },
+
   status(args) {
     const s = loadSession();
     if (!s) return console.log("[ccim] this session has not joined a channel.");
@@ -379,6 +385,7 @@ async function codexHook(s, event, input) {
   const reliable = process.env.CCIM_RELIABLE_CODEX === "1";
   const listening = reliable ? require("../lib/codex-ownership.cjs").listenerAlive(s) : alive(s.listenerPid);
   if (event === "end") {
+    if (!listening) return;
     if (reliable && (!s.listenerIdentity || require("../lib/codex-ownership.cjs").processIdentity(s.listenerPid) !== s.listenerIdentity))
       return console.error("[ccim] listener_identity_unknown");
     return void (listening && process.kill(s.listenerPid));
@@ -499,7 +506,7 @@ function socketAlive(socket) {
 
 const [cmd, ...args] = process.argv.slice(2);
 if (!commands[cmd]) {
-  console.log("usage: ccim <join|send|inbox|listen|who|focus|leave|delete|status>\n  join <channel>/<handle> [--secret-file path] [--relay url]\n  send <handle|*> [--urgent] \"<text>\"\n  inbox             print the messages waiting for this session and mark them read\n  listen            make sure this session receives messages (outside Claude Code and Codex: wait, print, exit)\n  who | focus on|off | leave | status [--reliable]\n  delete <channel> [--secret-file path]   delete the whole channel for everyone");
+  console.log("usage: ccim <join|send|inbox|listen|who|focus|leave|delete|status|reliable>\n  join <channel>/<handle> [--secret-file path] [--relay url]\n  send <handle|*> [--urgent] \"<text>\"\n  inbox             print the messages waiting for this session and mark them read\n  listen            make sure this session receives messages (outside Claude Code and Codex: wait, print, exit)\n  who | focus on|off | leave | status [--reliable]\n  reliable resolve <id> --delivered --confirm-delivered --generation <hash>\n  reliable resolve <id> --resend --confirm-duplicate-risk --generation <hash>\n  delete <channel> [--secret-file path]   delete the whole channel for everyone");
   process.exit(cmd ? 1 : 0);
 }
 if ((cmd === "join" || cmd === "delete") && args.includes("--secret")) {

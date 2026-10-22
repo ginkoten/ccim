@@ -18,7 +18,7 @@ function fixture(t) {
   let now = 1000000;
   const options = { directory, s, sessionId: "fixture", env: {}, format: () => "fixture body", now: () => now,
     queue: async args => { calls.push(args); return "accepted"; }, log: (e, fields) => events.push({ e, ...fields }),
-    api: async (_, method, op) => { acks.push({ method, op }); return { status: 200 }; } };
+    api: async (_, method, op) => { if (method === "GET") return { status: 200, messages: [{ id: 1 }, { id: 2 }] }; acks.push({ method, op }); return { status: 200 }; } };
   return { directory, sessionFile, s, calls, events, acks, options, advance: () => { now += 1000000; } };
 }
 test("corrupt journal is quarantined and unknown messages reconcile without blind send across restarts", async t => {
@@ -31,7 +31,7 @@ test("corrupt journal is quarantined and unknown messages reconcile without blin
   assert.ok(f.events.some(e => e.e === "journal_corrupt"));
   f.advance(); await createDelivery(f.options)({ id: 2 });
   assert.ok(f.calls[1].reconcileOnly);
-  assert.equal(deliveryStatus(f.directory, f.s).state, "reconciliation_only");
+  assert.equal(deliveryStatus(f.directory, f.s).state, "scoped_recovery");
 });
 test("valid JSON with invalid journal shape cannot silently become an empty ledger", async t => {
   const f = fixture(t); fs.writeFileSync(journalPath(f.directory, f.s), "[]");
