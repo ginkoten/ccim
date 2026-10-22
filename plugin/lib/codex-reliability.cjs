@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { submit } = require("./codex-queue.cjs");
+const { acquire, runtimeDirectory } = require("./codex-ownership.cjs");
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const hash = text => crypto.createHash("sha256").update(text).digest("hex");
@@ -10,22 +11,6 @@ function atomicJson(file, value) {
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
   fs.renameSync(temporary, file);
-}
-
-function acquire(sessionFile) {
-  // Resolve the alias so ~/.ccim and a project home contend on the same lock.
-  const canonical = fs.realpathSync(sessionFile);
-  const directory = path.join(path.dirname(canonical), ".receiver-runtime", path.basename(canonical, ".json"));
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const lock = path.join(directory, "owner.lock");
-  let fd;
-  try { fd = fs.openSync(lock, "wx", 0o600); }
-  catch (error) { if (error.code === "EEXIST") return null; throw error; }
-  const owner = { pid: process.pid, runId: crypto.randomUUID(), startedAt: new Date().toISOString() };
-  fs.writeFileSync(fd, JSON.stringify(owner));
-  fs.closeSync(fd);
-  // Stale locks are intentionally not stolen automatically: PID reuse and racing reclaimers are unsafe.
-  return { directory, owner, release: () => fs.unlinkSync(lock) };
 }
 
 function eventLogger(directory, owner, sessionId) {
@@ -110,12 +95,15 @@ function connection({ s, onMessage, log, sockets, WebSocketImpl = WebSocket, con
 }
 
 async function listen({ s, sessionId, sessionFile, writeSession, api, format, env = process.env }) {
-  const ownership = acquire(sessionFile);
-  if (!ownership) { console.error("[ccim] reliable listener lock exists; inspect owner before recovery"); return; }
+  const diagnosticDirectory = runtimeDirectory(sessionFile);
+  fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 });
+  const diagnosticLog = eventLogger(diagnosticDirectory, { pid: process.pid }, sessionId);
+  const ownership = acquire(sessionFile, { log: diagnosticLog });
+  if (!ownership) throw Object.assign(new Error("lock_busy"), { code: "lock_busy" });
   const { directory, owner } = ownership;
   const log = eventLogger(directory, owner, sessionId);
   const sockets = new Set(), pending = new Map();
-  const deliver = createDelivery({ directory, sessionId, s, api, format, log, env });
+  let deliver;
   let stopping = false, reason = "completed", failure, working = false;
   const stop = signal => {
     stopping = true; reason = signal;
@@ -137,7 +125,8 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
   process.on("SIGTERM", term); process.on("SIGINT", interrupt);
   let timer;
   try {
-    writeSession({ ...s, listenerPid: process.pid });
+    deliver = createDelivery({ directory, sessionId, s, api, format, log, env });
+    writeSession({ ...s, listenerPid: process.pid, listenerIdentity: owner.identity });
     log("started", { reason: "reliable_v1" });
     timer = setInterval(() => { void drain(); }, 15000);
     for (let delay = 1000; !stopping; delay = Math.min(delay * 2, 30000)) {

@@ -165,7 +165,9 @@ const commands = {
     if (s.host !== "codex" && ensureWaker(s, process.env.CLAUDE_CODE_MESSAGING_SOCKET, process.env.CLAUDE_CODE_MESSAGING_TOKEN)) {
       return console.log(`[ccim] listening for "${s.handle}" in channel "${s.channel}". New messages wake this session with a note to run \`ccim inbox\`. Nothing else to keep running.`);
     }
-    if (alive(s.listenerPid) && s.listenerPid !== process.pid) {
+    const listening = s.host === "codex" && process.env.CCIM_RELIABLE_CODEX === "1"
+      ? require("../lib/codex-ownership.cjs").listenerAlive(s) : alive(s.listenerPid);
+    if (listening && s.listenerPid !== process.pid) {
       console.log(`[ccim] a listener is already running for this session (pid ${s.listenerPid}). Not starting another.`);
       return;
     }
@@ -370,16 +372,22 @@ const commands = {
 
 // Codex keeps the listener alive across turns, so the hooks only restart it and hand over what focus mode held back.
 async function codexHook(s, event, input) {
-  if (event === "end") return void (alive(s.listenerPid) && process.kill(s.listenerPid));
+  const reliable = process.env.CCIM_RELIABLE_CODEX === "1";
+  const listening = reliable ? require("../lib/codex-ownership.cjs").listenerAlive(s) : alive(s.listenerPid);
+  if (event === "end") {
+    if (reliable && (!s.listenerIdentity || require("../lib/codex-ownership.cjs").processIdentity(s.listenerPid) !== s.listenerIdentity))
+      return console.error("[ccim] listener_identity_unknown");
+    return void (listening && process.kill(s.listenerPid));
+  }
   // A message delivered by `codex queue` starts a turn like a typed prompt; only a real prompt means a human is present.
   if (event === "prompt") return void (!String(input.prompt || "").startsWith("[ccim]") && (await api(s, "POST", "human", {}, 2000)));
-  if (event === "start" && !alive(s.listenerPid)) return startCodexListener();
+  if (event === "start" && !listening) return startCodexListener();
   if (event !== "stop") return;
 
   const who = await api(s, "GET", "who", null, 4000);
   if (who.status === 401) return void fs.rmSync(sessionFile(), { force: true });
   if (who.status !== 200) return;
-  if (!alive(s.listenerPid)) startCodexListener();
+  if (!listening) startCodexListener();
   if (!who.members.find((m) => m.handle === s.handle)?.focus) return;
   const { messages = [] } = await api(s, "GET", "inbox?all=1", null, 4000);
   if (messages.length) await deliverToCodex(s, messages);

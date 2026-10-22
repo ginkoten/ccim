@@ -100,12 +100,10 @@ test("missing queue/history evidence cannot authorize retry after uncertainty", 
   assert.ok(!f.calls.includes("thread/queue/add"));
 });
 
-test("session aliases share one atomic lock and stale ownership is never stolen", t => {
+test("session aliases share one atomic owner and release permits the next generation", t => {
   const f = fixture(t), alias = path.join(f.directory, "alias.json");
   fs.symlinkSync(f.sessionFile, alias);
   const first = acquire(f.sessionFile);
-  assert.equal(acquire(alias), null);
-  fs.writeFileSync(path.join(first.directory, "owner.lock"), JSON.stringify({ pid: 99999999 }));
   assert.equal(acquire(alias), null);
   first.release();
   const next = acquire(alias); assert.ok(next); next.release();
@@ -178,6 +176,6 @@ listen({s:{host:'codex',channel:'test',relay:'https://test.invalid',token:'test-
     assert.equal(records.filter(x => x.event === "started").length, 1);
     assert.equal(records.at(-1).event, "exited");
     assert.equal(records.at(-1).reason, terminal === 401 ? "unauthorized" : terminal === "SIGTERM" ? "SIGTERM" : `close_${terminal}`);
-    assert.equal(fs.existsSync(path.join(stateDir, "owner.lock")), false);
+    const next = acquire(f.sessionFile); assert.ok(next); next.release();
   });
 }
