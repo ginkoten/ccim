@@ -13,7 +13,7 @@ SQLite Durable Objects 支持免费计划但受额度限制，见[官方说明](
 默认使用 `~/.ccim`，不需要额外 home、session 链接或第二个 adapter。已有桥再加项目才看 [多项目接入](multi-project.md)。
 实际应用身份、可执行 join、hook 注册和新电脑清单统一在 [应用接收端](project-receivers.md)。
 **当前不是新电脑一键配置工具**：Claude 应用可能不提供所需 socket/hooks，Codex 的旧 handler 排除和新定义信任须在实际产品上确认。
-以下 `<channel>`、`<codex-handle>`、`/private/...` 均须替换为自己的获准名称/路径；历史工作站名称不作为新机默认值。
+以下 `<channel>`、`<codex-handle>`、`/private/...` 均须替换为自己的获准名称/路径；历史内容工作站使用 `ginko-bridge/neo-codex`；这些实际旧名称不作为新机默认值。
 
 ## 凭据与生成顺序
 

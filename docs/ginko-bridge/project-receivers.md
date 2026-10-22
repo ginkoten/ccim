@@ -8,7 +8,7 @@
 ## 1. 检查应用能力与真实身份
 
 先打开目标应用的目标项目，检查是否已有接收对话；有则恢复原对话，不重复创建或 join。
-记录应用版本、Node 版本、实际加载的 ccim commit/文件哈希、官方 Codex CLI 路径和版本。
+记录应用版本、Node 版本、实际加载的 ccim commit/文件哈希、官方 Codex CLI 路径和版本；`CCIM_CODEX` / spec.codex 应选与应用同版本的官方 CLI。
 Node 至少 22；系统代理 helper 需要 22.21+ 或 24.5+。在 Codex 应用提供的执行工具中检查：
 
 ```sh
@@ -134,7 +134,13 @@ fi
 `NODE_USE_ENV_PROXY` 仅加 ccim `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` 命令，不写 Claude 全局 settings。
 插件升级可能覆盖缓存，应记录并复核；本页不授权修改已有工作站缓存。
 
-在各自原应用对话中，用同一 home 的正式 CLI `who` 和限定进程元数据检查在线与 PID，不能用 `inbox` 作只读诊断（它 ACK）。
+在各自原应用对话中执行：
+
+```sh
+CCIM_HOME="/ABSOLUTE/PRIVATE_CCIM_HOME" node "/ABSOLUTE/CCIM/plugin/bin/ccim" who
+```
+
+结合限定进程元数据检查在线与 PID，不能用 `inbox` 作只读诊断（它 ACK）。
 获准后发送一条无业务消息并确认进入正确应用对话；queued、ACK、PID 存在分别不能替代入聊证据。
 可靠模式 uncertain/stuck 按 [状态与恢复](codex-reliability.md)处理，不换编号重发。
 应用恢复验证需旧进程**完全退出**后由原应用正式 hook 拉起新 PID，记录 UTC、版本、who、实际入站，再观察至少15分钟空闲。

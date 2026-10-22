@@ -1,5 +1,60 @@
 # 重建项目验收记录
 
+## #109（分支总审核整改）本地验收：2026-10-22
+
+本节是当前源码记录；下方旧日期记录保留原状，不代表现在仍未部署或仍在等待已完成审核。
+输入为 Claude 与 Grok 各自针对 base `8eb9b70` / HEAD `718c21c` 的独立报告及 Grok 总审核。
+本轮只改源码、占位示例、文档和 fixture；未更新运行副本、监听、hooks、trust、代理、秘密、频道或云部署，未 push/PR。
+
+整改覆盖所有权指纹与原子继任、损坏账本隔离、有界元数据核对、世代去重、focus 安全分支、hook 激活前置条件、应用配置步骤及文档分流。
+审核中建议的 user item `clientUserMessageId` 实际在已核对官方 schema 中名为 `clientId`；queue/add 与 queue/list 才使用前者。
+不使用正文 marker，也不臆造协议字段或 Claude 桌面能力。
+
+| 套件 | 审核 HEAD 已有测试 | 本轮新增 | 本轮通过 |
+| --- | ---: | ---: | ---: |
+| scripts（mjs + cjs） | 56 | 24 | 80 |
+| adapter | 74 | 0 | 74 |
+| relay | 57 | 0 | 57 |
+| 合计 | 187 | 24 | 211 |
+
+最终完整测试的代码 HEAD 为 `948d279`（后续仅文档/验收记录）。Node 24.16.0，命令：
+
+```sh
+node --test scripts/test/*.test.mjs scripts/test/*.test.cjs
+(cd adapter && node --test test/*.test.js)
+(cd relay && node --import ./test/env.js --test --test-concurrency=1 test/*.test.js)
+```
+
+实际以 TAP reporter 收集同一测试集合，在 git archive 的已跟踪文件副本运行；HOME/XDG/CCIM_HOME 临时隔离、环境按白名单重建，
+不继承真实凭据，复用已安装依赖，relay 历史升级测试仅引用只读 Git 历史。0失败、0跳过。
+SIGKILL 仅用于测试子进程；重启/PID 复用是 fixture 模拟，未强杀真实接收器。
+原 adapter/relay 测试未改；原可靠性测试随账本路径/元数据/时钟接口调整，行为断言保留；新增测试覆盖新风险。
+本轮没有再次 dry-run：Worker 源码与配置未变，历史打包证据沿用，不能当成本轮部署。
+
+两项建议保留决策：S2 的自动删除七天前 ACK 记录需先定义去重保留期，本轮只完成退避、stuck 与只读状态；
+S8 的全非法白名单 fail closed 与原 #74（独立桥频道）的显式回退需求冲突，本轮保持回退并修正文档。
+永久 hook 激活、旧 handler 单会话排除、本人信任、真实新版本入聊、完全退出恢复、Mac 睡眠/重启及 Claude 应用能力仍需单独现场验收。
+收尾顺序为 Grok 复核整改，再按明确批准推送/PR；本轮不发送桥消息。
+
+## #101（Codex 接收可靠性）历史现场证据补记
+
+来源为本机 `ccim-101-repair-result.md`、`ccim-101-runtime/idle-final.json` 与 `hook-routing-review.json` 的非秘密记录；本轮只读核对，未重新探测现场。
+`907fe88` 的隔离 runtime 曾实际运行，PID 45453；2026-10-21 23:52:42 UTC 仅一条
+#2（接收器可靠性自测）进入应用，官方 userMessage 恰好1条，journal acked 1 / uncertain 0。
+2026-10-22 00:09:09.764 UTC 距空闲起点911.555秒，同一 PID/版本在线、官方队列0、没有新的应用 turn。
+因此“只有假 RPC、从未真实投递”的说法不适用于这个历史版本；它也不能证明本轮新版本上线。
+
+当时四个已信任 hooks 仍指向旧缓存；候选永久路由未启用、完全退出后的新版本自动恢复未实测。
+这两个未完成项与已通过的15分钟空闲窗口分开记录；不承诺永久在线，也不把旧 PID2407 的退出归因于 Claude join。
+其准确退出时间/原因没有充分证据。共享 home 按 session 选身份，并非单一“当前成员”；错 session/链接/启动环境仍可能误路由。
+
+## #74（独立桥频道）部署历史状态更正
+
+本机 `MCP-LIVE-REPORT.md` 记录：2026-10-21 15:08:40.112 UTC 独立 adapter 已真实部署并取得 MCP 地址；
+之后两次 initialize/tools/list/只读状态成功，检查间隔超过一分钟。cron 配置已部署，但两次 poll 均 null，不能宣称推进通过。
+该次 secret list 仅 MCP_BEARER，尚缺 CCIM_TOKEN、WEBHOOK_URL、WEBHOOK_KEY；这是当时快照，**不推断后来用户是否已保存这些字段**。
+真实 URL 只留私下交接，不进入此仓库。本轮未重新部署或查询线上状态，Grok端到端/唤醒/隔离是否完成不能从 MCP 可达推导。
+
 ## #79 范围补充：安全准备记录（2026-10-21）
 
 当时提供 [历史终端接收模板](project-receivers-legacy-terminal.md)：Codex / Claude 两个启动入口、共享预检、

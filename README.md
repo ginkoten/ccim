@@ -34,7 +34,7 @@ Joining starts a background waker only when the current application runtime prov
 
 ### Codex
 
-`ccim listen` and the plugin hooks start a persistent listener. It pushes incoming batches into the receiving chat with `codex queue`, starting a new turn. Messages are acknowledged to the relay only after queuing succeeds. The receiver must be an interactive local CLI or app session; a one-shot `codex exec` process is not a persistent receiver. Plugin hooks must be enabled and trusted.
+`ccim listen` and the plugin hooks start a persistent listener. It pushes incoming batches into the receiving chat with `codex queue`, starting a new turn. Messages are acknowledged to the relay only after queuing succeeds. The current setup uses a dedicated application conversation; a one-shot `codex exec` process is not a persistent receiver. Plugin hooks must be enabled and trusted.
 
 ### Grok Bot
 
@@ -46,7 +46,7 @@ The adapter is optional: supported Claude and Codex receivers can use the relay 
 
 ## Get started
 
-You need Node 22+ on the deployment machine and every client that runs the CLI or helper scripts. Local validation has used Node 24. Claude Code needs an inbox-capable version for automatic wake-ups; Codex needs working hooks and `codex queue`. Check the [client guide](docs/ginko-bridge/clients.md) for lifecycle, trust and proxy requirements.
+You need Node 22+ on the deployment machine and every client that runs the CLI or helper scripts. Local validation has used Node 24. The Claude application runtime needs an inbox-capable version for automatic wake-ups; Codex needs working hooks and `codex queue`. Check the [client guide](docs/ginko-bridge/clients.md) for lifecycle, trust and proxy requirements.
 
 Follow the [rebuild guide](docs/ginko-bridge/rebuild.md) in this order:
 
