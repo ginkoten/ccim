@@ -8,6 +8,15 @@ const { generation, openJournal } = require("./codex-journal.cjs");
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const hash = text => crypto.createHash("sha256").update(text).digest("hex");
+const ERROR_CODES = new Set(["EISDIR", "EACCES", "EPERM", "ENOSPC", "ENOENT", "EIO", "EROFS", "EMFILE", "ENFILE",
+  "EXDEV", "EEXIST", "ENOTDIR", "binding_incomplete", "lock_busy", "lock_corrupt", "lock_history_limit",
+  "owner_identity_unknown", "rpc_response_too_large", "rpc_timeout", "rpc_unavailable"]);
+const errorCode = error => ERROR_CODES.has(error?.code) ? error.code : "unclassified";
+
+function reconnectSchedule(delay, openMs, random = Math.random) {
+  const base = openMs >= 60000 ? 1000 : delay;
+  return { wait: Math.floor(base * (1 + random() * 0.2)), next: Math.min(base * 2, 30000) };
+}
 
 function eventLogger(directory, owner, sessionId) {
   const file = path.join(directory, "events.jsonl");
@@ -98,7 +107,9 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
   const diagnosticDirectory = runtimeDirectory(sessionFile);
   fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 });
   const diagnosticLog = eventLogger(diagnosticDirectory, { pid: process.pid }, sessionId);
-  const ownership = acquire(sessionFile, { log: diagnosticLog });
+  let ownership;
+  try { ownership = acquire(sessionFile, { log: diagnosticLog }); }
+  catch (error) { diagnosticLog("runtime_error", { code: errorCode(error) }); throw new Error("reliable_receiver_failed"); }
   if (!ownership) throw Object.assign(new Error("lock_busy"), { code: "lock_busy" });
   const { directory, owner } = ownership;
   const log = eventLogger(directory, owner, sessionId);
@@ -119,7 +130,7 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
         if (["acked", "stuck"].includes(await deliver(message))) pending.delete(id);
       }
     } catch (error) {
-      log("runtime_error", { code: error.code || "unclassified" });
+      log("runtime_error", { code: errorCode(error) });
       failure = true; stop("runtime_error");
     } finally { working = false; }
   };
@@ -130,7 +141,8 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
     writeSession({ ...s, listenerPid: process.pid, listenerIdentity: owner.identity });
     log("started", { reason: "reliable_v1" });
     timer = setInterval(() => { void drain(); }, 15000);
-    for (let delay = 1000; !stopping; delay = Math.min(delay * 2, 30000)) {
+    for (let delay = 1000; !stopping;) {
+      let openMs = 0;
       const probe = await api(s, "GET", "who").catch(() => null);
       if (stopping) break;
       if (probe?.status === 401) { reason = "unauthorized"; break; }
@@ -140,11 +152,15 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
         } });
         log("disconnected", outcome);
         if (outcome.terminal) { reason = outcome.reason; break; }
-        if (outcome.openMs >= 60000) delay = 1000;
+        openMs = outcome.openMs;
       } else log("probe_failed", { code: probe?.status || 0 });
-      if (!stopping) { const wait = Math.floor(delay * (1 + Math.random() * 0.2)); log("reconnect_wait", { delayMs: wait }); await pause(wait); }
+      if (!stopping) {
+        const schedule = reconnectSchedule(delay, openMs);
+        delay = schedule.next;
+        log("reconnect_wait", { delayMs: schedule.wait }); await pause(schedule.wait);
+      }
     }
-  } catch (error) { failure = true; reason = "runtime_error"; log("runtime_error", { code: error.code || "unclassified" }); }
+  } catch (error) { failure = true; reason = "runtime_error"; log("runtime_error", { code: errorCode(error) }); }
   finally {
     stopping = true; clearInterval(timer);
     for (const ws of sockets) try { ws.close(); } catch { /* Already closed. */ }
@@ -157,4 +173,4 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
   if (failure) throw new Error("reliable_receiver_failed");
 }
 
-module.exports = { acquire, eventLogger, deliveryId, createDelivery, connection, listen };
+module.exports = { acquire, eventLogger, errorCode, reconnectSchedule, deliveryId, createDelivery, connection, listen };

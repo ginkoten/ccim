@@ -98,3 +98,39 @@ test("oversized RPC response has an explicit reason and cannot authorize resubmi
     rpcFactory: () => rpc(async () => { throw Object.assign(new Error("private raw response"), { code: "rpc_response_too_large" }); }) });
   assert.equal(value, "uncertain"); assert.deepEqual(events, ["rpc_response_too_large"]);
 });
+
+test("reconnect delay grows on flapping and resets only after a stable minute", () => {
+  const { reconnectSchedule } = require("../../plugin/lib/codex-reliability.cjs");
+  let delay = 1000;
+  const waits = [];
+  for (let n = 0; n < 7; n++) { const s = reconnectSchedule(delay, 59999, () => 0); waits.push(s.wait); delay = s.next; }
+  assert.deepEqual(waits, [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
+  assert.deepEqual(reconnectSchedule(delay, 60000, () => 0), { wait: 1000, next: 2000 });
+  assert.equal(reconnectSchedule(30000, 0, () => 1).wait, 36000);
+});
+test("runtime error codes use an allowlist rather than arbitrary exception content", () => {
+  const { errorCode } = require("../../plugin/lib/codex-reliability.cjs");
+  assert.equal(errorCode({ code: "EACCES", message: "private body" }), "EACCES");
+  assert.equal(errorCode({ code: "privateSecret123" }), "unclassified");
+  assert.equal(errorCode(new Error("private body")), "unclassified");
+});
+function transportFixture() {
+  const { QueueRpc } = require("../../plugin/lib/codex-queue.cjs");
+  const { StringDecoder } = require("node:string_decoder");
+  const q = Object.create(QueueRpc.prototype);
+  Object.assign(q, { buffer: "", bufferBytes: 0, decoder: new StringDecoder("utf8"), pending: new Map(), close() { this.closed = true; } });
+  return q;
+}
+test("RPC size limit counts UTF-8 bytes and rejects pending calls with a safe code", () => {
+  const q = transportFixture(); let error;
+  q.pending.set(1, { reject: e => { error = e; } });
+  q.receive(Buffer.from("中".repeat(6 * 1024 * 1024)));
+  assert.equal(error.code, "rpc_response_too_large"); assert.equal(q.closed, true); assert.equal(q.buffer, "");
+});
+test("RPC metadata decodes correctly across multibyte chunk boundaries", () => {
+  const q = transportFixture(); let result;
+  q.pending.set(1, { resolve: value => { result = value; } });
+  const input = Buffer.from(JSON.stringify({ id: 1, result: { text: "中文" } }) + "\n");
+  for (const byte of input) q.receive(Buffer.from([byte]));
+  assert.equal(result.result.text, "中文"); assert.equal(q.bufferBytes, 0);
+});

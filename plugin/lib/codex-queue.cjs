@@ -1,5 +1,6 @@
 "use strict";
 const { spawn } = require("node:child_process");
+const { StringDecoder } = require("node:string_decoder");
 
 // Use the public protocol; message bodies stay on stdin, never in process arguments/logs.
 class QueueRpc {
@@ -8,6 +9,8 @@ class QueueRpc {
     this.pending = new Map();
     this.nextId = 0;
     this.buffer = "";
+    this.decoder = new StringDecoder("utf8");
+    this.bufferBytes = 0;
     this.timeout = timeout;
     this.dead = false;
     this.child.on("error", () => this.fail());
@@ -24,11 +27,13 @@ class QueueRpc {
     this.pending.clear();
   }
   receive(chunk) {
-    this.buffer += chunk;
-    if (this.buffer.length > 16 * 1024 * 1024) { this.fail("rpc_response_too_large"); return this.close(); }
+    this.bufferBytes += chunk.length;
+    if (this.bufferBytes > 16 * 1024 * 1024) { this.fail("rpc_response_too_large"); return this.close(); }
+    this.buffer += this.decoder.write(chunk);
     let newline;
     while ((newline = this.buffer.indexOf("\n")) >= 0) {
       const line = this.buffer.slice(0, newline);
+      this.bufferBytes -= Buffer.byteLength(line) + 1;
       this.buffer = this.buffer.slice(newline + 1);
       let value;
       try { value = JSON.parse(line); } catch { continue; }

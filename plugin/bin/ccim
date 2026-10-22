@@ -499,7 +499,7 @@ function socketAlive(socket) {
 
 const [cmd, ...args] = process.argv.slice(2);
 if (!commands[cmd]) {
-  console.log("usage: ccim <join|send|inbox|listen|who|focus|leave|delete|status>\n  join <channel>/<handle> [--secret-file path] [--relay url]\n  send <handle|*> [--urgent] \"<text>\"\n  inbox             print the messages waiting for this session and mark them read\n  listen            make sure this session receives messages (outside Claude Code and Codex: wait, print, exit)\n  who | focus on|off | leave | status\n  delete <channel> [--secret-file path]   delete the whole channel for everyone");
+  console.log("usage: ccim <join|send|inbox|listen|who|focus|leave|delete|status>\n  join <channel>/<handle> [--secret-file path] [--relay url]\n  send <handle|*> [--urgent] \"<text>\"\n  inbox             print the messages waiting for this session and mark them read\n  listen            make sure this session receives messages (outside Claude Code and Codex: wait, print, exit)\n  who | focus on|off | leave | status [--reliable]\n  delete <channel> [--secret-file path]   delete the whole channel for everyone");
   process.exit(cmd ? 1 : 0);
 }
 if ((cmd === "join" || cmd === "delete") && args.includes("--secret")) {
