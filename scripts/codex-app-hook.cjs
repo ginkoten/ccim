@@ -22,7 +22,7 @@ function runHook(event, input, spec, deps = {}) {
   const env = (deps.proxyEnv || macosProxyEnv)({ ...base, CCIM_HOME: spec.home, CCIM_SESSION: spec.session,
     CCIM_HOST: "codex", CCIM_CODEX: spec.codex, CCIM_RELIABLE_CODEX: "1" });
   const result = (deps.spawn || spawnSync)(spec.node, [spec.cli, "hook", event], {
-    input: JSON.stringify(input), encoding: "utf8", timeout: event === "stop" ? 9000 : 4500,
+    input: JSON.stringify(input), encoding: "utf8", timeout: event === "stop" ? 9000 : event === "end" ? 2500 : 4500,
     env, stdio: ["pipe", "pipe", "pipe"],
   });
   return { skipped: false, status: result.status ?? 1,

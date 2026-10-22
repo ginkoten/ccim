@@ -44,7 +44,7 @@ test("all four events preserve the real session and select the isolated runtime"
         assert.equal(options.env.CCIM_HOST, "codex");
         assert.equal(options.env.CCIM_RELIABLE_CODEX, "1");
         assert.equal(options.env.CCIM_CODEX, spec.codex);
-        assert.equal(options.timeout, event === "stop" ? 9000 : 4500);
+        assert.equal(options.timeout, event === "stop" ? 9000 : event === "end" ? 2500 : 4500);
         return { status: 0, stdout: "" };
       } });
     assert.equal(calls, 1);
