@@ -4,14 +4,10 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { submit } = require("./codex-queue.cjs");
 const { acquire, runtimeDirectory } = require("./codex-ownership.cjs");
+const { generation, openJournal } = require("./codex-journal.cjs");
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const hash = text => crypto.createHash("sha256").update(text).digest("hex");
-function atomicJson(file, value) {
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
-  fs.renameSync(temporary, file);
-}
 
 function eventLogger(directory, owner, sessionId) {
   const file = path.join(directory, "events.jsonl");
@@ -29,31 +25,34 @@ function deliveryId(channel, id) {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-function createDelivery({ directory, sessionId, s, api, format, log, env, queue = submit }) {
-  const file = path.join(directory, "delivery.json");
-  let journal = {};
-  if (fs.existsSync(file)) journal = JSON.parse(fs.readFileSync(file, "utf8"));
-  const save = () => atomicJson(file, journal);
+function createDelivery({ directory, sessionId, s, api, format, log, env, queue = submit, now = Date.now }) {
+  const { data, save } = openJournal(directory, s, log), journal = data.entries;
+  const epoch = generation(s);
   return async message => {
-    const key = `${s.channel}:${message.id}`;
-    const id = deliveryId(s.channel, message.id);
-    const marker = `[ccim-delivery:${id}]`;
+    const key = String(message.id);
+    const id = deliveryId(epoch, message.id);
     const previous = journal[key];
     if (previous?.state === "acked") return "acked";
+    if (previous?.state === "stuck") return "stuck";
+    if (previous?.nextAttemptAt > now()) return previous.state;
     if (previous?.state !== "accepted") {
-      const reconcileOnly = previous?.state === "uncertain";
-      journal[key] = { state: "uncertain", deliveryId: id, updatedAt: new Date().toISOString() };
+      const reconcileOnly = data.quarantined || previous?.state === "uncertain";
+      const attempts = (previous?.attempts || 0) + 1;
+      journal[key] = { state: "uncertain", deliveryId: id, attempts, nextAttemptAt: 0, updatedAt: now() };
       save(); // Crash after queue acceptance must not turn into an unconditional re-send.
-      const result = await queue({ binary: env.CCIM_CODEX || "codex", env, threadId: sessionId, deliveryId: id, marker,
-        text: format(s, [message]) + "\n" + marker, reconcileOnly });
-      journal[key] = { ...journal[key], state: result, updatedAt: new Date().toISOString() };
+      let result = await queue({ binary: env.CCIM_CODEX || "codex", env, threadId: sessionId, deliveryId: id,
+        text: format(s, [message]), reconcileOnly, onEvent: reason => log("queue_diagnostic", { reason }) });
+      if (!["accepted", "not_sent", "uncertain"].includes(result)) result = "uncertain";
+      if (result !== "accepted" && attempts >= 8) { result = "stuck"; log("delivery_stuck", { messageId: message.id }); }
+      journal[key] = { ...journal[key], state: result, updatedAt: now(),
+        nextAttemptAt: result === "uncertain" ? now() + Math.min(15000 * 2 ** (attempts - 1), 900000) : 0 };
       save();
       log("delivery", { reason: result, messageId: message.id, deliveryId: id });
       if (result !== "accepted") return result;
     }
     const ack = await api(s, "POST", "ack", { ids: [message.id] }).catch(() => null);
     if (ack?.status !== 200) { log("ack_deferred", { messageId: message.id }); return "accepted"; }
-    journal[key] = { ...journal[key], state: "acked", updatedAt: new Date().toISOString() };
+    journal[key] = { ...journal[key], state: "acked", updatedAt: now() };
     save();
     log("acknowledged", { messageId: message.id, deliveryId: id });
     return "acked";
@@ -64,18 +63,19 @@ function connection({ s, onMessage, log, sockets, WebSocketImpl = WebSocket, con
   return new Promise(resolve => {
     const ws = new WebSocketImpl(`${s.relay.replace(/^http/, "ws")}/c/${s.channel}/listen`, ["ccim", s.token]);
     sockets.add(ws);
-    let settled = false, ping, lastPong = Date.now();
+    let settled = false, ping, openedAt, lastPong = Date.now();
     const done = result => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout); clearInterval(ping); sockets.delete(ws);
       try { ws.close(); } catch { /* Connection may already be closed. */ }
-      resolve(result);
+      resolve({ ...result, openMs: openedAt ? Date.now() - openedAt : 0 });
     };
     const timeout = setTimeout(() => done({ reason: "connect_timeout" }), connectTimeout);
     ws.onopen = () => {
       if (settled) return;
       clearTimeout(timeout);
+      openedAt = Date.now();
       log("connected");
       ping = setInterval(() => {
         if (Date.now() - lastPong > heartbeatMs * 3) return done({ reason: "heartbeat_timeout" });
@@ -116,9 +116,10 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
     try {
       for (const [id, message] of pending) {
         if (stopping) break;
-        if (await deliver(message) === "acked") pending.delete(id);
+        if (["acked", "stuck"].includes(await deliver(message))) pending.delete(id);
       }
-    } catch {
+    } catch (error) {
+      log("runtime_error", { code: error.code || "unclassified" });
       failure = true; stop("runtime_error");
     } finally { working = false; }
   };
@@ -139,11 +140,11 @@ async function listen({ s, sessionId, sessionFile, writeSession, api, format, en
         } });
         log("disconnected", outcome);
         if (outcome.terminal) { reason = outcome.reason; break; }
-        delay = 1000;
+        if (outcome.openMs >= 60000) delay = 1000;
       } else log("probe_failed", { code: probe?.status || 0 });
-      if (!stopping) { log("reconnect_wait", { delayMs: delay }); await pause(delay); }
+      if (!stopping) { const wait = Math.floor(delay * (1 + Math.random() * 0.2)); log("reconnect_wait", { delayMs: wait }); await pause(wait); }
     }
-  } catch { failure = true; reason = "runtime_error"; }
+  } catch (error) { failure = true; reason = "runtime_error"; log("runtime_error", { code: error.code || "unclassified" }); }
   finally {
     stopping = true; clearInterval(timer);
     for (const ws of sockets) try { ws.close(); } catch { /* Already closed. */ }

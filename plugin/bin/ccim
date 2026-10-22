@@ -310,9 +310,13 @@ const commands = {
     console.log(`[ccim] deleted channel "${channel}". All members were disconnected and its queued messages are gone.`);
   },
 
-  status() {
+  status(args) {
     const s = loadSession();
     if (!s) return console.log("[ccim] this session has not joined a channel.");
+    if (args.includes("--reliable")) {
+      const { runtimeDirectory } = require("../lib/codex-ownership.cjs");
+      return console.log(JSON.stringify(require("../lib/codex-journal.cjs").deliveryStatus(runtimeDirectory(sessionFile()), s)));
+    }
     const listener = alive(s.wake?.pid) ? `waking this session (pid ${s.wake.pid})` : alive(s.listenerPid) ? `running (pid ${s.listenerPid})` : "not running";
     console.log(`[ccim] channel "${s.channel}" as "${s.handle}" via ${s.relay}; listener ${listener}`);
   },

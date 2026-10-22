@@ -15,17 +15,17 @@ class QueueRpc {
     this.child.stdin.on("error", () => this.fail());
     this.child.stdout.on("data", chunk => this.receive(chunk));
   }
-  fail() {
+  fail(code = "rpc_unavailable") {
     this.dead = true;
     for (const job of this.pending.values()) {
       clearTimeout(job.timer);
-      job.reject(new Error("rpc_unavailable"));
+      job.reject(Object.assign(new Error(code), { code }));
     }
     this.pending.clear();
   }
   receive(chunk) {
     this.buffer += chunk;
-    if (this.buffer.length > 16 * 1024 * 1024) return this.close();
+    if (this.buffer.length > 16 * 1024 * 1024) { this.fail("rpc_response_too_large"); return this.close(); }
     let newline;
     while ((newline = this.buffer.indexOf("\n")) >= 0) {
       const line = this.buffer.slice(0, newline);
@@ -43,7 +43,7 @@ class QueueRpc {
     if (this.dead) return Promise.reject(new Error("rpc_unavailable"));
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error("rpc_timeout")); }, this.timeout);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(Object.assign(new Error("rpc_timeout"), { code: "rpc_timeout" })); }, this.timeout);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
     });
@@ -62,37 +62,42 @@ class QueueRpc {
   }
 }
 
-function containsMarker(value, marker) {
-  if (!value || typeof value !== "object") return false;
-  if (typeof value.text === "string" && value.text.includes(marker)) return true;
-  return Object.values(value).some(item => typeof item === "object" && containsMarker(item, marker));
-}
-
-async function findDelivery(rpc, threadId, deliveryId, marker) {
+async function findDelivery(rpc, threadId, deliveryId, onEvent = () => {}) {
   let cursor = null;
   const seen = new Set();
-  do {
+  for (let pageNumber = 0; pageNumber < 5; pageNumber++) {
     const page = await rpc.call("thread/queue/list", { threadId, cursor, limit: 100 });
     if (page.error || !Array.isArray(page.result?.data)) return "unknown";
-    if (page.result.data.some(item => item.clientUserMessageId === deliveryId || containsMarker(item, marker))) return "accepted";
+    if (page.result.data.some(item => item.clientUserMessageId === deliveryId)) return "accepted";
     cursor = page.result.nextCursor || null;
+    if (!cursor) break;
     if (cursor && seen.has(cursor)) return "unknown";
     seen.add(cursor);
-  } while (cursor);
-  const history = await rpc.call("thread/read", { threadId, includeTurns: true });
-  if (history.error || !history.result?.thread) return "unknown";
-  return containsMarker(history.result.thread, marker) ? "accepted" : "not_observed";
+  }
+  if (cursor) { onEvent("queue_page_limit"); return "unknown"; }
+  // The installed public schema exposes userMessage.clientId, not clientUserMessageId.
+  // Never use body text (including a quoted marker) as delivery evidence.
+  for (let pageNumber = 0; pageNumber < 3; pageNumber++) {
+    const page = await rpc.call("thread/turns/list", { threadId, cursor, limit: 20, sortDirection: "desc", itemsView: "full" });
+    if (page.error || !Array.isArray(page.result?.data)) return "unknown";
+    if (page.result.data.some(turn => Array.isArray(turn.items) && turn.items.some(item =>
+      item.type === "userMessage" && item.clientId === deliveryId))) return "accepted";
+    cursor = page.result.nextCursor || null;
+    if (!cursor) return "not_observed";
+  }
+  onEvent("history_page_limit");
+  return "unknown";
 }
 
-async function submit({ binary, env, threadId, deliveryId, marker, text, reconcileOnly = false, rpcFactory }) {
+async function submit({ binary, env, threadId, deliveryId, text, reconcileOnly = false, rpcFactory, onEvent = () => {} }) {
   const rpc = rpcFactory ? rpcFactory() : new QueueRpc(binary, env);
   let addIssued = false;
   try {
     await rpc.initialize();
-    const found = await findDelivery(rpc, threadId, deliveryId, marker);
-    if (found === "accepted") return "accepted";
-    if (reconcileOnly) return "uncertain"; // Absence from a snapshot is not proof that an earlier add failed.
-    if (found === "unknown") return "not_sent";
+    if (reconcileOnly) {
+      const found = await findDelivery(rpc, threadId, deliveryId, onEvent);
+      return found === "accepted" ? "accepted" : "uncertain";
+    }
     addIssued = true;
     const added = await rpc.call("thread/queue/add", {
       threadId, clientUserMessageId: deliveryId,
@@ -101,9 +106,10 @@ async function submit({ binary, env, threadId, deliveryId, marker, text, reconci
     if (added.result?.queuedSubmission?.clientUserMessageId === deliveryId) return "accepted";
     // Do not infer non-delivery from an arbitrary server error after issuing a mutation.
     return "uncertain";
-  } catch {
+  } catch (error) {
+    onEvent(["rpc_response_too_large", "rpc_timeout", "rpc_unavailable"].includes(error.code) ? error.code : "rpc_failed");
     return addIssued || reconcileOnly ? "uncertain" : "not_sent";
   } finally { rpc.close(); }
 }
 
-module.exports = { QueueRpc, containsMarker, findDelivery, submit };
+module.exports = { QueueRpc, findDelivery, submit };

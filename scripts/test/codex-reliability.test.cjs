@@ -9,6 +9,7 @@ const { once } = require("node:events");
 const runtimePath = path.resolve(__dirname, "../../plugin/lib/codex-reliability.cjs");
 const { acquire, eventLogger, createDelivery, connection } = require(runtimePath);
 const { submit } = require("../../plugin/lib/codex-queue.cjs");
+const { journalPath } = require("../../plugin/lib/codex-journal.cjs");
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ccim-reliable-test-"));
@@ -20,12 +21,13 @@ function fixture(t) {
 function deliveryFixture(t, results, ackStatuses = [200]) {
   const { directory } = fixture(t);
   const calls = [], acks = [];
-  const options = { directory, sessionId: "test-session", s: { channel: "test-channel" },
+  let clock = 1000000;
+  const options = { directory, sessionId: "test-session", s: { channel: "test-channel", relay: "https://test.invalid", token: "fixture" }, now: () => clock,
     env: {}, log: () => {}, format: () => "private-test-body",
     api: async (_s, _method, _op, body) => { acks.push(body.ids); return { status: ackStatuses.shift() ?? 200 }; },
     queue: async args => { calls.push(args); return results.shift() ?? "accepted"; },
   };
-  return { options, calls, acks, deliver: createDelivery(options), message: { id: 7, text: "private-test-body" } };
+  return { options, calls, acks, advance: () => { clock += 1000000; }, deliver: createDelivery(options), message: { id: 7, text: "private-test-body" } };
 }
 
 test("definite pre-submit failure retries without losing listener work", async t => {
@@ -41,8 +43,10 @@ test("uncertain submission is reconciliation-only across process restart", async
   const f = deliveryFixture(t, ["uncertain", "uncertain", "accepted"]);
   assert.equal(await f.deliver(f.message), "uncertain");
   const resumed = createDelivery(f.options);
+  f.advance();
   assert.equal(await resumed(f.message), "uncertain");
   assert.equal(f.acks.length, 0);
+  f.advance();
   assert.equal(await resumed(f.message), "acked");
   assert.ok(f.calls.slice(1).every(call => call.reconcileOnly));
 });
@@ -60,7 +64,7 @@ test("duplicate relay delivery after successful ACK never enqueues twice", async
   await f.deliver(f.message);
   assert.equal(f.calls.length, 1);
   assert.equal(f.acks.length, 1);
-  const state = fs.readFileSync(path.join(f.options.directory, "delivery.json"), "utf8");
+  const state = fs.readFileSync(journalPath(f.options.directory, f.options.s), "utf8");
   assert.ok(!state.includes("private-test-body"));
 });
 test("crash during queue call leaves an uncertain write-ahead record", async t => {
@@ -78,7 +82,7 @@ function rpcFixture(mode) {
     async call(method) {
       calls.push(method);
       if (method === "thread/queue/list") return { result: { data: mode === "queued" ? [{ clientUserMessageId: "id" }] : [] } };
-      if (method === "thread/read") return { result: { thread: { turns: [{ items: [{ text: mode === "delivered" ? "marker" : "other" }] }] } } };
+      if (method === "thread/turns/list") return { result: { data: [{ items: [{ type: "userMessage", clientId: mode === "delivered" ? "id" : null, text: "marker" }] }] } };
       if (method === "thread/queue/add") {
         if (mode === "timeout") throw new Error("timeout");
         return { result: { queuedSubmission: { clientUserMessageId: "id" } } };
@@ -89,7 +93,7 @@ function rpcFixture(mode) {
 for (const mode of ["queued", "delivered", "normal", "timeout", "unavailable"]) {
   test(`official queue transport classifies ${mode} without blind resubmit`, async () => {
     const f = rpcFixture(mode);
-    const actual = await submit({ threadId: "thread", deliveryId: "id", marker: "marker", text: "body", rpcFactory: () => f.rpc });
+    const actual = await submit({ threadId: "thread", deliveryId: "id", text: "body", reconcileOnly: ["queued", "delivered"].includes(mode), rpcFactory: () => f.rpc });
     assert.equal(actual, mode === "timeout" ? "uncertain" : mode === "unavailable" ? "not_sent" : "accepted");
     assert.equal(f.calls.filter(x => x === "thread/queue/add").length, ["normal", "timeout"].includes(mode) ? 1 : 0);
   });
