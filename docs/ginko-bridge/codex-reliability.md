@@ -61,9 +61,9 @@ node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" status --reliable
 
 ```sh
 # 已有充分已投递证据：明确确认这一条可走 ACK
-node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" reliable resolve <id> --delivered --confirm-delivered --generation <hash>
+node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" reliable resolve "<id>" --delivered --confirm-delivered --generation "<hash>"
 # 无法确认投递，但操作者明确承担可能重复的风险：允许这一条重投
-node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" reliable resolve <id> --resend --confirm-duplicate-risk --generation <hash>
+node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" reliable resolve "<id>" --resend --confirm-duplicate-risk --generation "<hash>"
 ```
 
 命令使用当前正式会话绑定并核对世代，再取得与监听**同一原子所有权锁**；不改绑定，不绕过活 writer，不启动进程，不做网络操作。

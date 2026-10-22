@@ -139,3 +139,17 @@ test("SessionEnd with no listener exits quietly without misleading identity warn
   const result = cliFixture(f, ["hook", "end"], JSON.stringify({ session_id: "test" }));
   assert.equal(result.status, 0); assert.equal(result.stderr, "");
 });
+
+test("malformed snapshot cannot silently authorize new delivery", async t => {
+  const f = fixture(t); f.legacy(); f.pending([{ id: "1" }]);
+  const deliver = createDelivery(f.options);
+  await assert.rejects(deliver({ id: 2 }), /recovery_snapshot_failed/);
+  assert.equal(f.calls.length, 0); assert.equal(f.requests.some(r => r.op === "ack"), false);
+  assert.equal(JSON.parse(fs.readFileSync(f.file, "utf8")).recoveryIds, undefined);
+});
+test("manual resolution refuses corrupt ledgers without replacing them and releases its lock", async t => {
+  const f = fixture(t); fs.writeFileSync(f.file, "corrupt");
+  assert.throws(() => resolveDelivery({ ...f.options, resolution: f.resolution(1, "resend") }), /resolution_journal_unavailable/);
+  assert.equal(fs.readFileSync(f.file, "utf8"), "corrupt");
+  const owner = acquire(f.sessionFile); assert.ok(owner); owner.release();
+});
