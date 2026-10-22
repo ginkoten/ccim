@@ -393,6 +393,8 @@ async function codexHook(s, event, input) {
   if (who.status !== 200) return;
   if (!listening) startCodexListener();
   if (!who.members.find((m) => m.handle === s.handle)?.focus) return;
+  // Until the listener owns a focus-flush protocol, never bypass its journal from a hook.
+  if (reliable) return console.error("[ccim] reliable_focus_flush_unsupported; use ccim focus off for journaled delivery");
   const { messages = [] } = await api(s, "GET", "inbox?all=1", null, 4000);
   if (messages.length) await deliverToCodex(s, messages);
 }

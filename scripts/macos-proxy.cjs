@@ -20,7 +20,7 @@ function macosProxyEnv(base = process.env, options = {}) {
   let text;
   try {
     text = options.readProxy ? options.readProxy() : execFileSync("/usr/sbin/scutil", ["--proxy"], {
-      encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8", timeout: options.timeout ?? 3000, stdio: ["ignore", "pipe", "pipe"],
     });
   } catch { throw new Error("Cannot read system proxy; no proxy details printed"); }
   const http = proxyAddress(text, "HTTP");

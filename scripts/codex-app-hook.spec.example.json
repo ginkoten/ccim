@@ -1,0 +1,10 @@
+{
+  "session": "<REAL_APP_SESSION_UUID>",
+  "project": "/ABSOLUTE/PROJECT",
+  "home": "/ABSOLUTE/PRIVATE_CCIM_HOME",
+  "node": "/ABSOLUTE/NODE",
+  "cli": "/ABSOLUTE/CCIM_CHECKOUT/plugin/bin/ccim",
+  "codex": "/ABSOLUTE/OFFICIAL_APP_CODEX_CLI",
+  "proxy": "none",
+  "legacyHandlersExcluded": false
+}
