@@ -81,6 +81,7 @@ ccim join "<channel>/<codex-handle>" --if-absent
 ccim listen
 ```
 
+其中 `ccim listen` 也在 **Codex 应用接收对话里让它执行**；不是另开终端版 Codex 或在独立实施线程启动监听。
 此步生成频道 secret 和成员 token，保存到私有 `CCIM_HOME`，不回显。
 已存在频道/成员、凭据不匹配时停止，不能换名字绕过。
 ### 不回显地导出频道 secret

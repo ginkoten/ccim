@@ -20,7 +20,8 @@ CLI 的可靠存活判定使用指纹；SessionEnd 只有指纹精确匹配才�
 
 `delivery-<sha256>.json` 的世代来自 relay、channel、成员 token 的哈希；文件与 queue 去重 ID 不包含原 token。
 成员重新创建/令牌更换产生新世代，避免重复的 relay 消息 ID 被旧 acked 记录吞掉。
-有旧 `delivery.json` 时保守进入迁移核对，不能猜它属于新世代。不要复制其他会话账本作为恢复方法。
+有旧 `delivery.json` 时对恢复时的未确认消息保守核对，不能猜旧账本属于当前世代。不要复制其他会话账本作为恢复方法。
+**同一 relay 换域名别名也会换世代**；改地址前须核清旧世代全部 uncertain/stuck，并保存已接受证据。未核清时不要改地址绕过阻塞；本轮未实现跨别名迁移。
 
 写前日志先持久化 uncertain，再调用官方 app-server `thread/queue/add`；确认接受后保存 accepted，最后 ACK。
 ACK 失败只重试 ACK。首次 not_sent 消息直接 queue/add，不读整段历史。
@@ -30,7 +31,11 @@ queue 只匹配 `clientUserMessageId`；turns 只匹配 `userMessage.clientId`�
 无命中、响应过大、页数耗尽或不支持协议时保持 uncertain，不据“没看到”重发。
 
 账本无法解析/结构无效时先创建 `.recovery-required` 标志，再把原件隔离为 `.corrupt-*`，保存空的 quarantine 账本。
-保留所有未知消息为只核对状态；绝不因重建空账本直接重发。初始化失败也释放本轮所有权。
+持有独占锁后、连接 WebSocket 前，通过原始 HTTP `GET inbox?all=1` 取得当前全部未确认 ID（含 focus 积压），
+持久化为 `recoveryIds`。该 HTTP 查询没有 ACK；它不同于会取件并 ACK 的 CLI `ccim inbox`。
+只对这份固定集合中没有确定状态的消息执行核对；快照之后的新 ID 正常投递。已有 uncertain/stuck 不因快照解除，已有 not_sent/accepted/acked 按各自确定状态处理。
+边界只存 ID、不存正文，重启不重新扩张；旧全局 quarantine 账本升级时也只补一次边界。边界获取失败时拒绝启动投递，记录 `recovery_snapshot_failed`，释放锁，不把失败当空 inbox。
+即使旧账本全部 acked，也不盲信它覆盖当前世代；恢复快照中的未确认消息仍保守核对，快照后的新消息不受牵连。
 这些文件留在私有运行目录，不提交或公开；不要手工清掉恢复标志来解除保守状态。
 
 uncertain 核对从15秒指数退避，最大15分钟；8次未解决变成 stuck，无自动 resend/ACK。
@@ -40,9 +45,52 @@ accepted 的 ACK 失败不消耗投递次数。只读状态入口，在原会话
 node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" status --reliable
 ```
 
-它只读取账本，列出未决消息编号、状态、尝试数与时间，不写状态、不启动 listener、不拉 inbox 或 ACK。
+它只读取账本，列出世代指纹 `generation`、恢复 ID 集合、未决消息编号、状态、尝试数与时间，不写状态、不启动 listener、不拉 inbox 或 ACK。
 当前不自动清理7天前 acked 记录：relay 过期重现和迁移边界尚未验证，不能通过清理降低去重保证。
 账本和继任链会增长，保留容量监测；自动压缩/清理需单独设计和迁移验证。
+
+## stuck / 隔离条目的人工处理
+
+以下是取得具体批准后的操作者流程，**本轮只用 fixture 验证，未对真实账本执行**。
+
+1. 先在原接收对话的真实身份环境中运行 `status --reliable`，核对频道、世代和单条消息编号。
+   用官方队列/会话元数据或接收方结果核实已投递；有限历史“没查到”不是未投递证明。
+2. 通过产品支持的单会话方式暂停该接收器自动启动入口，并正常停止经身份核实的原监听；等待退出及独占锁释放。
+   不杀未知 PID。没有单会话暂停能力就不强行实施；已活跃/未知 listener 或活 owner 都会使命令失败。
+3. 只选一个 ID 和一个决定，带上只读状态中的当前世代哈希，执行下列二选一命令。占位符须替换；不要批量循环。
+
+```sh
+# 已有充分已投递证据：明确确认这一条可走 ACK
+node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" reliable resolve <id> --delivered --confirm-delivered --generation <hash>
+# 无法确认投递，但操作者明确承担可能重复的风险：允许这一条重投
+node "/ABSOLUTE/RUNTIME/plugin/bin/ccim" reliable resolve <id> --resend --confirm-duplicate-risk --generation <hash>
+```
+
+命令使用当前正式会话绑定并核对世代，再取得与监听**同一原子所有权锁**；不改绑定，不绕过活 writer，不启动进程，不做网络操作。
+它只将指定条目设为 accepted（delivered）或 not_sent（resend），保留其他条目及隔离边界，写入固定 `manual_resolution` 审计事件。
+结果 `staged:true, networkActions:0` 表示决定已保存，**不代表已投递或已 ACK**。
+未知 ID、旧世代、已 acked 条目均拒绝；已 accepted 条目拒绝 resend，应只继续原 ACK。
+指定条目必须已在账本中或固定 recoveryIds 中；无法读取/验证账本时拒绝操作，不自动创建空账本放行。
+
+4. 用只读 status 核对决定；按批准流程恢复原应用可靠监听。下一次收到同 ID 时，accepted 只 ACK 该条，not_sent 经正常写前日志投递后才 ACK。
+   ACK 失败保留 accepted；queue 结果不确定仍按原 uncertain 规则核对。若 relay 已无该消息，不伪造正文或新消息号补发。
+   原进程退出后再处理；禁止编辑尚被运行中 listener 缓存的账本。
+
+## 继任链达到上限的维护（仅条件式人工流程）
+
+`lock_history_limit` 不授权删锁。当前没有自动压缩命令；下面只用于另获维护批准、可证明全部写入者已停止的情况：
+
+1. 定位该 session 的真实 runtime 目录；经正式产品入口关闭这个 session 的全部自动启动路径，包括旧/新 hooks 和外部 launcher，其他会话不动。
+   如无法做到单会话暂停，就保留报错并报告能力缺口，不继续文件操作。
+2. 核对链尾的 runId、PID/启动指纹和 released 状态，并确认该目录全部持有者/竞争启动已退出。
+   不能只看一个 PID 不在或仅看 released 文件；未知进程身份、链损坏、并发启动未排除均停止。
+3. 在不再有任何 writer 的维护窗口，为**该 session**创建同文件系统私有归档目录，备份账本/恢复标志/事件并记录哈希。
+   将 `owner.lock` 与完整 `owners/` 一并移入归档（不删除、不只移其中一项）；任何一步失败都保持启动路径关闭，恢复这对文件后再调查。
+   `delivery-*.json`、`delivery.json`、`.recovery-required`、隔离原件与事件日志保留原位、原权限，不清空去重记录。
+4. 再次核对无 writer 和归档完整，才按批准流程恢复唯一原应用入口；新 owner 将从空链原子创建。
+   核对唯一 PID/指纹和未决账本、消息验收；有 uncertain 时不能改回不识别账本的旧消费者。
+
+这不是在线原子压缩；安全性依赖先排除所有启动/写入者。本轮未实施或宣称现场验证，不能把归档步骤当成无需停写的通用修锁命令。
 
 ## Focus、重连与退出
 
@@ -64,8 +112,12 @@ SIGKILL 没有退出日志；应用退出、睡眠、重启是不同场景，单
 | `lock_busy` | 已有/无法排除活 owner；核实指纹，不另起监听 |
 | `lock_reclaimed` | 已核实旧 owner 失效，原子继任成功 |
 | `lock_corrupt` / `lock_history_limit` | 人工核对私有元数据，不能删锁抢占 |
-| `journal_corrupt` / `journal_legacy_hold` | 保留隔离账本，官方证据核对后再决定迁移 |
-| `delivery_stuck` | 达到未解决次数，使用只读 status，禁止换编号重发 |
+| `journal_corrupt` / `journal_legacy_hold` | 保留原件，固定恢复 ID 边界，边界外新消息正常投递 |
+| `recovery_snapshot` / `recovery_snapshot_failed` | 边界已保存 / 未取得可靠边界，失败不投递 |
+| `manual_resolution` | 单条决定已保存；尚非投递或 ACK 回执 |
+| `resolution_listener_active_or_unknown` / `lock_busy` | 未排除活写入者，不能人工改账本 |
+| `resolution_generation_mismatch` / `resolution_entry_unknown` | 世代或条目不匹配；重新只读核对，不换ID猜测 |
+| `delivery_stuck` | 达到未解决次数，使用只读 status；按上述逐条确认流程处理，禁止换编号盲重发 |
 | `queue_page_limit` / `history_page_limit` | 有界核对耗尽，未证明不存在 |
 | `rpc_response_too_large` / `rpc_timeout` | RPC 未取得可靠结果，保留 uncertain |
 | `runtime_error` | 仅记录安全 code；`unclassified` 不猜原因 |
