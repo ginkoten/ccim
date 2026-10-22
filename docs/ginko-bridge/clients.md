@@ -4,8 +4,10 @@
 
 ## Codex
 
+现行接法以 [应用接收端操作步骤](project-receivers.md) 为准；先核对真实应用身份和 hook 能力。
+
 - 建专用本地交互接收 chat，由该 chat 核对自身 host 和 `CODEX_THREAD_ID`。
-  不借其他 chat ID，不在部署 chat 加入已占用的 neo-codex。
+  不借其他 chat ID，不在部署 chat 加入已占用的 `<codex-handle>`。
 - 检查 `codex plugin --help`、`codex plugin marketplace add --help`、
   `codex plugin add --help`、`codex queue --help`；安装入口 `ginkoten/ccim`。
 - manifest 指向 `plugin/hooks/hooks.json`。确认插件启用，按产品提示完成 hook 信任，
@@ -18,15 +20,13 @@
 
 参考[官方插件文档](https://developers.openai.com/codex/plugins/)，以新机当前 CLI 帮助与 UI 提示为准。
 
-## Claude Code
+## Claude 应用接收端
 
-`/plugin marketplace add ginkoten/ccim`，再 `/plugin install ccim@ccim`。
-在专用交互会话加入 `claude`；确认 hooks 载入和信任。
-有 `CLAUDE_CODE_MESSAGING_SOCKET` 时插件启动 waker，按环境使用
-`CLAUDE_CODE_MESSAGING_TOKEN` 认证，只发固定提示，再由 `ccim inbox` 取正文并 ack。
-没有 inbox socket 时按 CLI 提示运行阻塞 listener，收完再监听。
-换账号不自动停止旧后台进程；不要把后台 shell 当作已验证交互会话。
-[官方插件说明](https://code.claude.com/docs/en/plugins)不保证每个版本有相同 inbox socket 能力。
+先按 [应用能力检查](project-receivers.md#1-检查应用能力与真实身份) 核对当前应用是否正式提供本地插件 hooks、真实 session ID 和 inbox socket。
+只有支持这些能力的版本才能使用本插件；[Claude Code 插件文档](https://code.claude.com/docs/en/plugins)不构成普通桌面聊天支持 hooks 的保证。
+在产品支持的插件入口安装 `ginkoten/ccim` 的 `ccim`，由本人完成信任。不要为此启动命令行版 Claude。
+当前运行时提供 `CLAUDE_CODE_MESSAGING_SOCKET` 时，waker 使用运行时 token 认证，仅发固定提示；
+本会话再用 `ccim inbox` 取正文并 ACK。能力缺失时停止并记录缺口，不伪造环境或改用阻塞终端 listener。
 
 ### Claude 的代理环境
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { receiverPlan, runReceiver } from "../project-receiver.cjs";
+import { receiverPlan, runReceiver } from "../legacy/project-receiver.cjs";
 import { macosProxyEnv } from "../macos-proxy.cjs";
 
 function fixture(fn) {

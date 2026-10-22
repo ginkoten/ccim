@@ -57,7 +57,7 @@ function runReceiver(client, argv = process.argv.slice(2), deps = {}) {
   if (argv.length > 1 || (argv[0] && !["--check", "--start"].includes(argv[0]))) throw Error("Use --check (default) or --start; no CLI passthrough");
   const base = deps.env || process.env;
   const plan = receiverPlan(client, base);
-  const proxyEnv = deps.proxyEnv || require("./ccim-macos-proxy.cjs").macosProxyEnv;
+  const proxyEnv = deps.proxyEnv || require("../macos-proxy.cjs").macosProxyEnv;
   const env = receiverEnv(plan, base, proxyEnv);
   const spawn = deps.spawn || spawnSync;
   checkCli(plan, env, spawn);

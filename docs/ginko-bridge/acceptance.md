@@ -2,7 +2,7 @@
 
 ## #79 范围补充：安全准备记录（2026-10-21）
 
-已提供 [项目接收端模板](project-receivers.md)：Codex / Claude 两个启动入口、共享预检、
+当时提供 [历史终端接收模板](project-receivers-legacy-terminal.md)：Codex / Claude 两个启动入口、共享预检、
 项目专用 CCIM_HOME 与身份清理、动态代理和接收/exec 分工。默认仅预检，实际启动需 `--start`。
 本机 help/version 已核对；新增5项离线测试通过，语法与变更范围扫描通过。
 此前154项完整测试与三个 dry-run 复用既有证据，本轮未重复执行或声称已上线。
@@ -48,7 +48,7 @@ relay 在无秘密临时副本运行：首次因历史迁移测试找不到 Git 
 包装脚本改用相邻运行副本。复制前后 SHA-256 一致，语法与隔离 fixture 检查通过；
 启动不再依赖开发 checkout。helper 逻辑未变，复用上述完整测试和 dry-run 证据，未重复执行全套。
 未重启原监听、未调用真实 who、未验证排队投递；这些由原接收会话执行，见
-[恢复步骤](multi-project.md#codex-接收代理与原会话恢复)。不将代理支持差异认定为旧监听退出的根因。
+[恢复步骤](acceptance.md#历史部署与原会话恢复步骤归档)。不将代理支持差异认定为旧监听退出的根因。
 
 **仍待外部验收**：push / merge、频道及成员准备、秘密配置、正式部署、实际 MCP 地址、
 cron 运行、至少间隔一分钟两次只读检查、真实 Grok 多轮任务与产出、频道隔离、接收端重启。
@@ -198,3 +198,64 @@ Ginko 补充授权：先取得真实 MCP 地址供 GinkoAI 创建例程，暂不
 CCIM_TOKEN 尚未提供，因而有效relay轮询不可用；缺项尚包括真实接收会话首次加入和grok provision。
 待GinkoAI例程生成后补 WEBHOOK_URL、WEBHOOK_KEY；再补成员令牌并完成唤醒、双向消息和频道隔离验收。
 未重试之前网络失败的Git push，远端未合并事实不变；父会话负责最终桥回报。
+
+## 历史部署与原会话恢复步骤归档
+
+以下由旧多项目指南移入，只保留当时步骤；不是当前状态或新一轮授权。当前应用入口见 [project-receivers.md](project-receivers.md)，上线状态按各日期证据区分。
+
+### 经确认后才执行的部署步骤
+
+1. 核对账号、Worker 名、实际 relay URL、namespace 和每分钟 cron。工作站部署保持原状。
+2. 由获授权的新项目接收会话创建频道，加入 `codex` / `claude`；不得让独立执行线程抢占接收身份。
+3. 由操作者在私密环境生成 `grok` 成员令牌。脚本用法：
+   `CCIM_HOME=~/.ccim-ginkoai node scripts/provision-grok.mjs CHANNEL TOKEN_FILE [HANDLE]`。
+   默认 HANDLE 为 `grok`，支持 `codex` 等合法名称；只请求 `ifAbsent: true, mustExist: true`，
+   文件 `wx` / 0600，不覆盖、不自动重试、不打印任何参数或凭据值。
+   它会读取所选 `CCIM_HOME/config.json`；未获秘密操作授权时不要运行。
+4. 操作者通过隐藏输入设置 `CCIM_TOKEN`、`MCP_BEARER`、`WEBHOOK_URL`、`WEBHOOK_KEY`。
+   命令形态为 `npx wrangler secret put SECRET_NAME --config wrangler.ginkoai.local.toml`；
+   `CCIM_TOKEN` 可从私有令牌文件重定向。第一次 secret put 可能创建占位 Worker，也需确认。
+5. 另行确认后执行 `npx wrangler deploy --config wrangler.ginkoai.local.toml`。
+   记录实际 workers.dev 地址，末尾加 `/mcp`，只在私下交接，不写进仓库。
+6. 在 Workers & Pages 的 Trigger Events 核对 cron；通过下节两次只读检查验证轮询时间推进。
+
+### Codex 接收代理与原会话恢复
+
+新项目的双客户端启动、只读预检与收件/exec 分工见 [项目接收端模板](project-receivers.md)。
+该准备流程与下面既有工作站原会话恢复分开，不覆盖工作站启动入口。
+
+仓库模板为 [ccim-local-hook.example.cjs](../../scripts/ccim-local-hook.example.cjs)，
+代理辅助模块的唯一维护源为 [macos-proxy.cjs](../../scripts/macos-proxy.cjs)。
+将已验证源码复制到开发 checkout 之外的固定接收目录，命名为 `ccim-macos-proxy.cjs`，
+与实际 `ccim-local-hook.cjs` 相邻。包装脚本只用 `require("./ccim-macos-proxy.cjs")`，
+不得引用开发 checkout 的绝对路径或指向它的软链接，避免切分支或移动仓库破坏启动。
+先备份，只替换启动子进程环境；不改全局 Codex 设置、系统代理、launchd 或权限。
+模板路径变量 `CCIM_PLUGIN_BIN` / `CCIM_CODEX` 和 `CCIM_RECEIVER_SESSION_ID` 由接收会话操作者设置；
+实际既有包装脚本可以继续保留自己的固定运行时与会话校验。
+
+运行副本不独立编辑。同步时先在仓库修改、验证并提交源码，再核对接收目录当前文件未被其他任务改动，
+备份既有运行副本和包装脚本，将源码复制到相邻临时文件；复制前后计算 SHA-256，
+确认源文件未变化且源/副本哈希一致后原子替换运行副本。首次安装不得覆盖已有未知文件。
+不改既有文件权限；记录源码 commit、源/副本路径和 SHA-256 于本机报告，不把个人路径写入仓库。
+仅更新 helper 时无需改包装脚本或全局设置。同步后做语法及隔离 fixture 检查，
+真实重启仍由原接收会话按下方步骤执行。更换开发分支不会自动更新运行副本；更新必须显式同步。
+
+每次有效 hook 启动时读取 `scutil --proxy` 中当前启用的 HTTP(S) 代理，设置
+`HTTP_PROXY`、`HTTPS_PROXY`、`NODE_USE_ENV_PROXY=1`、`NO_PROXY=localhost,127.0.0.1,::1`。
+同步小写代理变量，避免继承值优先级冲突；不记录地址和凭据，不固定端口。
+仅支持无凭据的系统 HTTP(S) 代理；PAC-only、禁用或非法配置明确失败，不默默直连。
+Node 要求 22.21+ 或 24.5+。原 `CCIM_HOME`、成员、频道和会话身份保持不变。
+
+这使代理设置随现有 hooks 持久生效；不新增开机守护进程。
+Mac 重启后必须先恢复原接收会话，hooks 才能启动原有自动重连监听。
+不得据此声称 Node 代理缺失是历次监听退出的已证实原因。
+
+原接收会话自行执行重启验收，独立执行线程不执行：
+
+1. 确认进入原接收线程，既有绑定和批准的包装脚本未变；查看无敏感值的 hook 状态。
+2. 向既有包装脚本传原 session_id 的 hook `end`，仅停止它自己的 listener，再传 `start`。
+   不 join、不 rebind，不停止其他会话的监听。`prompt` 不会替代 `start` 启动监听。
+3. 用相同动态代理环境执行原会话 `ccim who`，确认原成员在线。
+4. 确认排队消息自动送入原 chat；不要用 `ccim inbox` 当无副作用检查，它会确认消息。
+5. 记录时间、在线结果、已送达消息编号和 hook 退出码；不记录原文、凭据或完整私有配置。
+   若恢复失败，保留错误码交操作者处理，不换线程接管，也不让发送方补发已入队消息。

@@ -1,12 +1,19 @@
 # ccim — Ginko-Bridge
 
-Connect **Claude Code, Codex, and Grok Bot** across machines through a lightweight, self-hosted messaging relay. Send work to another agent, wake its receiving session or routine, and get a reply back through the same channel.
+Connect **Claude, Codex, and Grok Bot** across machines through a lightweight, self-hosted messaging relay. Send work to another agent, wake its receiving session or routine, and get a reply back through the same channel.
 
-Claude Code and Codex receive messages in their existing working sessions, with their own repositories and context. Grok Bot connects through a Cloudflare Worker adapter that polls for messages, wakes a routine, and exposes authenticated MCP tools.
+Application receivers require a real session identity and supported local hooks; Claude additionally requires an inbox socket. A normal desktop chat does not imply these capabilities. Grok Bot connects through a Cloudflare Worker adapter that polls for messages, wakes a routine, and exposes authenticated MCP tools.
 
 This is a public fork of [web3nomad/ccim](https://github.com/web3nomad/ccim), with a Grok adapter and guides for rebuilding the bridge on a new machine or account. The repository contains source code and placeholder deployment files, not a shared hosted service or ready-to-use credentials.
 
-**Start here:** [Rebuild the bridge](docs/ginko-bridge/rebuild.md) · [Connect your clients](docs/ginko-bridge/clients.md) · [Verify the connection](docs/ginko-bridge/verify.md). The setup guides are in Chinese.
+**Choose your setup:** the guides are in Chinese.
+
+| Situation | Entry |
+| --- | --- |
+| New machine/account, one channel | [Single-channel rebuild](docs/ginko-bridge/rebuild.md) |
+| Existing bridge, add one project/channel | [Multi-project extension](docs/ginko-bridge/multi-project.md) |
+| Connect application receiving conversations | [App receiver steps and capability gates](docs/ginko-bridge/project-receivers.md) |
+| Dropped listener or uncertain delivery | [Troubleshooting](docs/ginko-bridge/troubleshooting.md) · [Opt-in reliability](docs/ginko-bridge/codex-reliability.md) |
 
 ## How it works
 
@@ -14,16 +21,16 @@ The relay stores channel membership and queues. Each client connects in the way 
 
 ```mermaid
 flowchart LR
-    Claude[Claude Code session] <-->|WebSocket + HTTP| Relay[ccim relay]
+    Claude[Claude app with inbox capability] <-->|WebSocket + HTTP| Relay[ccim relay]
     Codex[Codex session] <-->|WebSocket + HTTP| Relay
     Adapter[Grok adapter] <-->|HTTP: inbox, send, ack| Relay
     Adapter -->|Webhook: channel, IDs, senders| Grok[Grok Bot routine]
     Grok <-->|Authenticated MCP: read, reply, send, ack, status| Adapter
 ```
 
-### Claude Code
+### Claude application receiver
 
-Joining starts a background listener when Claude Code provides its inbox socket. A message wakes the existing session with a fixed notification, without the peer's message text. The session calls `ccim inbox` to read and acknowledge the queued messages. Hooks help restart the listener and deliver unread messages at the end of a turn.
+Joining starts a background waker only when the current application runtime provides its actual session ID and inbox socket. If these capabilities are absent, stop at that gap; do not substitute terminal Claude Code or invent an identity. A message wakes the existing session with a fixed notification, without the peer's message text. The session calls `ccim inbox` to read and acknowledge the queued messages. Hooks help restart the listener and deliver unread messages at the end of a turn.
 
 ### Codex
 
@@ -35,7 +42,7 @@ A separate Worker polls the relay **once per minute**. For eligible messages, it
 
 The routine reads with `grok_inbox`, replies with `grok_reply`, and acknowledges handled messages with `grok_ack`. It can use `grok_send` for authorized proactive messages and `grok_status` to inspect wake and delivery records. The relay and adapter keep working while local client machines are offline; receiving sessions still need to be running to process their queued work.
 
-The adapter is optional: Claude Code and Codex can use the relay without Grok Bot. The relay also retains optional OAuth MCP support for ChatGPT and a plain-shell client path for tools such as OpenClaw; see [all client options](docs/usage.md).
+The adapter is optional: supported Claude and Codex receivers can use the relay without Grok Bot. The relay also retains optional OAuth MCP support for ChatGPT and a plain-shell client path for tools such as OpenClaw; see [all client options](docs/usage.md).
 
 ## Get started
 
@@ -48,19 +55,7 @@ Follow the [rebuild guide](docs/ginko-bridge/rebuild.md) in this order:
 3. **Add Grok, if needed.** Provision its member only after the channel exists. Configure the adapter, its Worker secrets, the Bot's secure MCP Bearer, and a webhook-triggered routine.
 4. **Verify each stage.** Check scheduled polling first, then use non-sensitive messages to test the client pairs you intend to use.
 
-Install this fork's plugin in Claude Code:
-
-```text
-/plugin marketplace add ginkoten/ccim
-/plugin install ccim@ccim
-```
-
-In Codex (check your installed CLI's help for supported plugin commands):
-
-```sh
-codex plugin marketplace add ginkoten/ccim
-codex plugin add ccim@ccim
-```
+Use the [app receiver guide](docs/ginko-bridge/project-receivers.md) to inspect plugin support, install through the supported product interface, obtain the actual identity, and review hook trust. Terminal receiver launchers are historical material only.
 
 Set your relay using `--relay` on join, `CCIM_RELAY`, or private `CCIM_HOME/config.json`. **This fork has no public relay fallback.** Joined sessions retain their saved relay URL until explicitly migrated. Installing the plugin alone does not deploy a relay, join a channel, or configure Grok.
 
@@ -78,7 +73,7 @@ The adapter exposes MCP server version `0.2.0`. All five tools act as the config
 | `grok_ack` | Acknowledge messages after handling them, removing them from the relay queue. |
 | `grok_status` | Inspect recorded message stages, wake counters, reply attempts, or a proactive send by `clientId`. |
 
-**Current branch detail:** proactive recipient names are a fixed allowlist in [`adapter/src/mcp.js`](adapter/src/mcp.js), not an environment setting. Check both the advertised tool schema and runtime allowlist before adapting this bridge to different member names. Hop markers remain available for tracing; this adapter does not impose send or wake frequency/daily quotas.
+`ALLOWED_RECIPIENTS` configures the proactive recipient allowlist. Unset or all-invalid input falls back to `claude,neo-codex` (excluding the sender); an empty value does not disable sending. Verify the request-time `tools/list` enum before deployment. New proactive messages must explicitly include `"hop": 0` (scheme B). Hop markers remain for tracing; the adapter imposes no send or wake frequency/daily quotas.
 
 ## Delivery, limits and safety
 
@@ -109,6 +104,9 @@ The legacy `MAX_HOP`, `SENDER_LIMIT`, `SENDER_WINDOW_MIN`, `DAILY_CAP`, `SEND_LI
 | Guide | Use it for |
 |---|---|
 | [Rebuild](docs/ginko-bridge/rebuild.md) | Cloudflare setup, deployment order, channel/member provisioning and secret storage. |
+| [App receivers](docs/ginko-bridge/project-receivers.md) | Real app identities, join, links, guarded hook registration and trust. |
+| [Multiple projects](docs/ginko-bridge/multi-project.md) | Add a channel without repeating the first bridge setup. |
+| [Reliability](docs/ginko-bridge/codex-reliability.md) | Ownership, generation journals, bounded reconciliation and recovery limits. |
 | [Clients](docs/ginko-bridge/clients.md) | Codex hooks, Claude listeners, proxies, Grok routines and secure variable mapping. |
 | [Verification](docs/ginko-bridge/verify.md) | Pairwise round trips, stage evidence, idempotency and uncertain outcomes. |
 | [Rotation](docs/ginko-bridge/rotation.md) | Moving machines or accounts, replacing credentials and preserving membership. |
@@ -134,7 +132,7 @@ From the repository root, install package-local dependencies and run the suites:
 ```sh
 (cd relay && npm ci && npm test)
 (cd adapter && npm ci && npm test)
-node --test scripts/test/*.test.mjs
+node --test scripts/test/*.test.mjs scripts/test/*.test.cjs
 ```
 
 Check both bundles with the checked-in placeholder configurations; these commands do not upload a Worker:

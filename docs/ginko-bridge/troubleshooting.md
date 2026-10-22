@@ -47,3 +47,11 @@ inbox、ack、reply 是不同操作。先查 grok_status 的 missing、当前 na
 恢复证据依次记录：成员认证成功、原消息仍在队列、正常 listener 将消息交给 `codex queue`、
 接收 chat 实际出现相同编号的入站消息。队列为空本身不证明模型已经读取；不要用手动 ack 清队列，
 也不要让发送方补发已入队消息。若只证明采用现有代理后连通，应写“已恢复，原退出原因未确定”。
+
+## 可靠 Codex 接收器
+
+先读 [可靠性、日志和原因码](codex-reliability.md)，不要以 config 修改时间推断退出原因。
+原会话环境的 `ccim status --reliable` 只读列未决账本，不启动/ACK；`inbox` 不是只读检查。
+`lock_busy` 先核所有权，`journal_corrupt` 保留隔离账本，`delivery_stuck` 不换编号重发。
+事件位置为真实 session 目录 `.receiver-runtime/<session-id>/events.jsonl`；旧 `codex-queue.log` 不是新运行时日志。
+新旧 hook 路由/信任未解决时，不先停当前监听；具体激活前置条件见 [应用接收端](project-receivers.md#5-正式注册排除旧-handlers本人信任)。

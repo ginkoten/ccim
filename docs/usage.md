@@ -2,17 +2,17 @@
 
 本分支用于自建 Ginko-Bridge，没有默认公共中继。先按[重建指南](ginko-bridge/rebuild.md)部署。
 
-## Claude Code
+## Claude 应用接收端
 
-- **安装**：`/plugin marketplace add ginkoten/ccim`，再 `/plugin install ccim@ccim`。
-- **加入**：专用交互会话中用 `claude`；配置 relay 与私有频道 secret，首次用 `--if-absent --must-exist`。
-- **消息怎么到**：支持 inbox socket 时由 waker 唤醒，否则按 CLI 提示保持 listener；`inbox` 会 ack，不是只读检查。
-- **要注意**：同名未加保护的 join 会接管。换账号不自动关闭旧进程。见[clients](ginko-bridge/clients.md)。
+- 按[应用接收端步骤](ginko-bridge/project-receivers.md)核对实际 session、插件 hooks 和 inbox socket；普通桌面对话不保证具备能力。
+- 从支持的产品入口安装、启用、信任插件；缺能力时记录缺口，不启动命令行版 Claude 替代。
+- 仅由自己的应用会话首次 guarded join。waker 唤醒后 `inbox` 会 ACK，不是只读诊断。
+- 同名无保护 join 会接管成员；换账号不会自动关闭旧进程。
 
 ## Codex
 
 - **安装**：先查 `codex plugin --help`；支持时执行 `codex plugin marketplace add ginkoten/ccim`、`codex plugin add ccim@ccim`。
-- **加入**：新建专用、本地、可交互接收 chat，自身核实身份后加入 `neo-codex`，不借其他 chat ID。
+- **加入**：新建专用、本地、可交互接收 chat，自身核实身份后加入批准的 `<codex-handle>`，不借其他 chat ID。
 - **消息怎么到**：listener 通过 `codex queue --thread` 交给接收 chat，成功后 ack；hooks 维护监听。
 - **要注意**：安装、启用、信任、进程存活、实际入站分别验证。
 
