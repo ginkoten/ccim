@@ -34,10 +34,15 @@ export function guardRelay(relay, { storage, cfg, now, backlog }) {
   }
   // Operator-configured recovery only. A unique non-secret approval id claims exactly one read-only attempt,
   // including across crashes. Cron requires an explicit deployment marker; MCP and secret changes cannot clear it.
-  guarded.recheck = async (approvalId, supersedes) => {
+  guarded.recheck = async (approvalId, supersedes, allowBacklogApproval) => {
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(approvalId || "")) return { ok: false, error: "approval_id_required" };
     if (supersedes !== undefined && !/^[A-Za-z0-9_-]{8,64}$/.test(supersedes)) return { ok: false, error: "invalid_superseded_approval" };
     if (cfg.relayMode !== "direct") return { ok: false, error: "oauth_recovery_requires_operator" };
+    // Check before claiming the approval: missing isolation must not consume it.
+    const fence = await backlog?.status();
+    if (fence?.error) return { ok: false, error: fence.error };
+    if (!fence?.active && allowBacklogApproval !== approvalId)
+      return { ok: false, error: "backlog_isolation_required" };
     const k = await key, attemptKey = `${k}:recheck:${approvalId}`;
     const claim = await storage.transaction(async tx => {
       const prev = await tx.get(k);

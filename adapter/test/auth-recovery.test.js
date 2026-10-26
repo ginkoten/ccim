@@ -14,7 +14,7 @@ function fixture() {
   const make = identity => guardRelay({
     peek: async () => ({ ok: false, status: 401 }),
     identity: async () => { calls++; return identity(); },
-  }, { storage, cfg, now: () => 1234 + calls });
+  }, { storage, cfg, now: () => 1234 + calls, backlog: { rejection: async () => null, status: async () => ({active:true,through_id:10}) } });
   const attempt = async id => [...(await storage.list({ prefix: "auth:" }))].find(([k]) => k.endsWith(`:recheck:${id}`))?.[1];
   return { storage, make, attempt, calls: () => calls };
 }
@@ -89,7 +89,7 @@ test("cron requires the explicit supersedes marker and never retries a failed ta
   const f = fixture(), broken = f.make(() => { throw Error("interrupted"); });
   await broken.peek(); await assert.rejects(broken.recheck(oldId));
   let requests = 0;
-  const env = makeEnv({ CCIM_CHANNEL: cfg.channel, CCIM_HANDLE: cfg.handle, AUTH_RECHECK_APPROVAL: newId });
+  const env = makeEnv({ CCIM_CHANNEL: cfg.channel, CCIM_HANDLE: cfg.handle, BACKLOG_THROUGH_ID: "10", AUTH_RECHECK_APPROVAL: newId });
   const restart = () => new Adapter({ storage: f.storage }, env, { log() {}, fetch: async (url, init) => {
     requests++;
     assert.equal(url, "https://relay.test/c/ginkoai/who");

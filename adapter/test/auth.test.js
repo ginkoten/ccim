@@ -4,7 +4,7 @@ import worker, { Adapter } from "../src/index.js";
 import { makeContext, tick, summary } from "../src/core.js";
 import { harness, makeEnv, MemoryStorage, TOKEN, MCP_BEARER } from "./helpers.js";
 
-const recheck = (adapter, id = "approved-test-001") => adapter.ctx().relay.recheck(id);
+const recheck = (adapter, id = "approved-test-001") => adapter.ctx().relay.recheck(id, undefined, id);
 
 test("downstream 401 persists across restart and token changes; cron stops without losing last poll", async () => {
   const h = harness({ CCIM_TOKEN: "invalid-fixture-token" });
@@ -145,6 +145,7 @@ test("operator deployment marker authorizes one probe; failure never repeats and
   const h = harness({ CCIM_TOKEN: "invalid-fixture-token" });
   await h.tick();
   h.env.AUTH_RECHECK_APPROVAL = "approved-deploy-001";
+  h.env.AUTH_RECHECK_ALLOW_BACKLOG = "approved-deploy-001";
   assert.equal((await h.tick()).auth_recovery.ok, false);
   const afterFailure = h.relay.calls.length;
   for (let i = 0; i < 4; i++) await h.tick();
@@ -153,6 +154,7 @@ test("operator deployment marker authorizes one probe; failure never repeats and
   await h.tick();
   assert.equal(h.relay.calls.length, afterFailure, "changing token does not reuse an already consumed approval");
   h.env.AUTH_RECHECK_APPROVAL = "approved-deploy-002";
+  h.env.AUTH_RECHECK_ALLOW_BACKLOG = "approved-deploy-002";
   const recovered = await h.tick();
   assert.deepEqual(recovered, { polled: false, auth_recovery: { ok: true } });
   assert.equal(h.relay.calls.length, afterFailure + 1);

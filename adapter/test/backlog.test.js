@@ -5,6 +5,25 @@ import {Adapter} from '../src/index.js';
 import {tick,ingest} from '../src/core.js';
 import {sendReply} from '../src/replies.js';
 
+test('missing fence refuses recovery without spending approval; installing fence permits same approval after restart',async()=>{
+ const h=harness({CCIM_TOKEN:'invalid',AUTH_RECHECK_APPROVAL:'review-fence-001'});await h.tick();
+ h.env.CCIM_TOKEN=TOKEN;const before=structuredClone(h.storage.map);const calls=h.relay.calls.length;
+ for(let i=0;i<2;i++)assert.equal((await h.tick()).auth_recovery.error,'backlog_isolation_required');
+ assert.deepEqual(h.storage.map,before);assert.equal(h.relay.calls.length,calls);
+ h.env.AUTH_RECHECK_ALLOW_BACKLOG='a-different-approval';assert.equal((await h.tick()).auth_recovery.error,'backlog_isolation_required');
+ h.env.BACKLOG_THROUGH_ID='10';const restarted=new Adapter({storage:h.storage},h.env,h.adapter.deps);
+ assert.equal((await tick(restarted.ctx())).auth_recovery.ok,true);
+ assert.equal((await restarted.ctx().relay.authState()).recovery.approval_id,'review-fence-001');
+});
+test('explicit old-backlog consent matches this approval; fence conflicts cannot be bypassed',async()=>{
+ const h=harness({CCIM_TOKEN:'invalid'});await h.tick();h.env.CCIM_TOKEN=TOKEN;
+ h.env.AUTH_RECHECK_APPROVAL='review-old-001';h.env.AUTH_RECHECK_ALLOW_BACKLOG='review-old-001';
+ assert.equal((await h.tick()).auth_recovery.ok,true);
+ const bad=harness({CCIM_TOKEN:'invalid'});await bad.tick();bad.env.CCIM_TOKEN=TOKEN;
+ bad.env.AUTH_RECHECK_APPROVAL='review-bad-001';bad.env.AUTH_RECHECK_ALLOW_BACKLOG='review-bad-001';bad.env.BACKLOG_THROUGH_ID='bad';
+ const before=structuredClone(bad.storage.map);assert.equal((await bad.tick()).error,'backlog_fence_conflict');assert.deepEqual(bad.storage.map,before);
+});
+
 test('fence persists across restarts and removed config; conflicting or invalid config fails closed',async()=>{
  const h=harness({BACKLOG_THROUGH_ID:'10',CCIM_TOKEN:'invalid'}); await h.tick();
  const before=structuredClone(h.storage.map);const restarted=new Adapter({storage:h.storage},{...h.env,BACKLOG_THROUGH_ID:undefined},h.adapter.deps);

@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | queued_offline | 成员在线状态、本地 session ID、hooks 是否可信、listener 是否仍运行 | 已入队不等于失败；恢复正确接收会话，不重复发 |
 | 409 part/clientId | 同 ID 的正文、收件人、part 与已有发送记录 | 同内容幂等复用；不同内容冲突不靠换 part 盲发 |
-| 429 no_human_in_the_loop | relay 响应 max、LOOP_GUARD_MAX、真实人类参与 | 默认256；0关闭；不要伪造 `/human`，修改配置属于另行部署 |
+| 429 no_human_in_the_loop | relay 响应 max、LOOP_GUARD_MAX、真实人类参与 | 缺省0（关闭）；非法值仍回落256；0关闭；不要伪造 `/human`，修改配置属于另行部署 |
 | Bearer 401/403 | 请求的是 relay 还是 adapter；各自 token 类型、是否被同名 rejoin 撤销 | 不输出 token；grok 用 MCP_BEARER，adapter 用 CCIM_TOKEN |
 | OAuth 失败 | 是否启用 OAUTH_ENC_KEY、issuer/redirect/bindings、客户端支持 | 默认关闭；查授权阶段及明确错误，不能拿 Bearer 顶替 OAuth |
 | Cloudflare 403/1010 | 原始状态、响应类型、脱敏错误码、Ray ID、Worker 是否收到请求 | 403 本身不能证明 Cloudflare 拦截；HTML 1010 与 Worker JSON 拒绝分开判断 |
@@ -51,3 +51,9 @@ inbox、ack、reply 是不同操作。先查 grok_status 的 missing、当前 na
 # 多频道401排查入口
 
 先按 [身份分层验收](verify.md) 区分 MCP入口401、实时中继401、历史blocked和监听离线。核对本频道映射，不读取受限会话或重join。成员缺失必须先排除旧凭据修复任务仍在途，得到明确批准后才能 guarded创建；已有成员停止，不把创建授权当轮换授权。无审计时保留未知触发事件，见 [故障复盘](incident-20261024.md)。
+
+## 429 的计数与配置
+
+仅真实人类在该频道已加入的会话输入，正式prompt hook会POST human将streak清零；不要让agent伪造human请求。若目标是长期关闭防循环阈值，须在获批部署中显式设置LOOP_GUARD_MAX="0"并通过部署硬检查，不删除DO或清业务去重账本。现有429应先核配置/真实人类输入，不能把业务换ID重发当清零。配置生效后的正常新消息路径另验。
+
+Claude离线且正式hook暂不可恢复时，按 [Claude唤醒兜底](wake-claude.md) 处理。

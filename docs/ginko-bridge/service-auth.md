@@ -51,6 +51,9 @@ key 由 relay/channel/handle/mode 组成，并位于现有 STATE_NAMESPACE 内�
 approval_id 是人工批准的关联编号，不是凭据；仅具备 MCP Bearer 的调用者不能设置部署变量。
 不能自行生成编号代替批准；本文是维护流程，不自动授权部署或配置修改。
 
+恢复前先验证持久隔离已安装。未装边界时返回 backlog_isolation_required，不消耗批准编号、不探测、不解除停止。
+仅明确批准处理旧消息时，另设 AUTH_RECHECK_ALLOW_BACKLOG 为与本次 AUTH_RECHECK_APPROVAL 完全相同的编号；on/true或旧编号均无效。该例外允许后续cron处理旧队列，不能用身份修复批准代替。损坏/冲突/hold仍不可绕过。
+
 下次 cron 先持久化 checking 和去重编号，再只发一次 direct `GET who`。只有身份正确才解除停止；
 401、网络错误、错误 handle 均保持停止。同一批准编号不能重复执行，包括换进程；并发请求只能有一个探测。
 验证成功的 tick 不继续读取消息；正常业务轮询到下一次 cron 才恢复。失败后保留同一变量不会持续请求；
@@ -85,10 +88,9 @@ adapter 可单独发布到获准的目标 Worker；共享源码不代表获准�
 relay 审计是共享中继变更，会影响所有频道，必须单独批准部署并检查配置/迁移。
 代码未增加凭据、外部服务、常驻进程或依赖，也不修改 DO namespace。
 
-当前分支包含既有 #138 查询与更早的 LOOP_GUARD_MAX 实现；历史线上 relay 使用 LOOP_GUARD=off。
-新代码不读取旧 `LOOP_GUARD`；仅保留 `LOOP_GUARD=off` 仍会因新变量缺失而启用默认256阈值。
-若获准采用新实现且要保持当前关闭行为，必须在实际部署配置显式设置 `LOOP_GUARD_MAX="0"`，
-并分别验证构建/版本的有效普通绑定与实际阈值为0；检查查询不清零streak、既有计数/队列/去重状态保留。
+本分支不包含 #138 查询，保留成员审计与已有 LOOP_GUARD_MAX 实现；历史线上 relay 使用 LOOP_GUARD=off。
+当前缺省与示例均为0（关闭），非法配置仍回落256。新代码不读取旧 LOOP_GUARD；为保持关闭行为，发布前必须显式配置 LOOP_GUARD_MAX="0"，通过 `node scripts/check-relay-deploy.mjs relay/wrangler.local.toml` 硬检查。
+部署清单必须保存检查结果，禁止使用 --var 或环境配置覆盖已检查的值；多环境配置须单独审查，脚本直接拒绝。按 rebuild 的 npm run deploy 路径执行；本轮不部署。
 离线回归应覆盖超过24及256次发送仍不因防循环拦截；任何线上发送验证须另获明确批准。
 这属于明确的变量迁移及共享relay发布动作，本轮未执行，不能仅靠保留旧off声明行为不变。
 

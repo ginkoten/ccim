@@ -11,3 +11,5 @@
 部署时先保持auth blocked，等待cron安装持久边界；验证隔离入口、旧消息未消失及双端身份通过后，才允许唯一AUTH_RECHECK_APPROVAL恢复。首次恢复tick仅GET who，后续tick只唤醒新ID。线上诊断新消息须明确无需回复、无业务任务；隔离消息不得作为真实业务测试。解除隔离/处理旧积压需独立决定，不提供自动释放入口。
 
 异常时可设置仅该Worker的BACKLOG_HOLD=on恢复业务暂停，无需伪造401或更换凭据；cron及所有业务入口失败关闭，身份诊断仍只读可用。该标记不会清除持久隔离或修改账本；off/未设置不覆盖原auth停止。不能在隔离或验收错误时自动循环重试恢复。
+
+恢复硬门槛：没有已安装持久边界时，恢复检查返回backlog_isolation_required且不消耗批准号。只有明确批准处理旧队列，才将AUTH_RECHECK_ALLOW_BACKLOG设为本次AUTH_RECHECK_APPROVAL的同一编号；普通身份修复不隐含该许可。冲突、损坏或hold不能用此例外绕过。

@@ -88,7 +88,7 @@ export async function tick(ctx) {
   if (fence.error) return { polled: false, error: fence.error };
   if ((await ctx.relay.authState())?.blocked) {
     // Only an operator's explicit non-secret deployment marker enables one recovery probe.
-    if (ctx.env.AUTH_RECHECK_APPROVAL) return { polled: false, auth_recovery: await ctx.relay.recheck(ctx.env.AUTH_RECHECK_APPROVAL, ctx.env.AUTH_RECHECK_SUPERSEDES) };
+    if (ctx.env.AUTH_RECHECK_APPROVAL) return { polled: false, auth_recovery: await ctx.relay.recheck(ctx.env.AUTH_RECHECK_APPROVAL, ctx.env.AUTH_RECHECK_SUPERSEDES, ctx.env.AUTH_RECHECK_ALLOW_BACKLOG) };
     return { polled: false, error: "downstream_auth_blocked" };
   }
   const peek = await ctx.relay.peek();

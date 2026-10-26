@@ -61,6 +61,10 @@ export async function inspectAdapter({ url, bearer, probeIdentity = false, reque
   return {
     server_version: typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version) ? version : null,
     tools: TOOLS,
+    send_recipients: (() => {
+      const names = listed.tools.find(t => t.name === "grok_send")?.inputSchema?.properties?.to?.enum;
+      return Array.isArray(names) && names.every(n => typeof n === "string" && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(n)) ? names : null;
+    })(),
     entry_auth: "authenticated",
     identity_probe: probeIdentity ? { source: status.structuredContent.probe?.source === "worker_bound_identity" ? "worker_bound_identity" : null, checked_at: Number.isSafeInteger(status.structuredContent.probe?.checked_at) ? status.structuredContent.probe.checked_at : null } : null,
     auth_stop_at: Number.isSafeInteger(summary.health?.downstream_auth?.at) ? summary.health.downstream_auth.at : null,

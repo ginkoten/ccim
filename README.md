@@ -39,7 +39,7 @@ The adapter is optional: Claude Code and Codex can use the relay without Grok Bo
 
 ## Get started
 
-You need Node 22+ on the deployment machine and every client that runs the CLI or helper scripts. Local validation has used Node 24. Claude Code needs an inbox-capable version for automatic wake-ups; Codex needs working hooks and `codex queue`. Check the [client guide](docs/ginko-bridge/clients.md) for lifecycle, trust and proxy requirements.
+You need Node 24.5+ on the deployment machine and every client that runs the CLI or helper scripts. Local validation has used Node 24. Claude Code needs an inbox-capable version for automatic wake-ups; Codex needs working hooks and `codex queue`. Check the [client guide](docs/ginko-bridge/clients.md) for lifecycle, trust and proxy requirements.
 
 Follow the [rebuild guide](docs/ginko-bridge/rebuild.md) in this order:
 
@@ -88,7 +88,7 @@ The adapter reports send outcomes as `sent`, `rejected`, or `uncertain`. Durable
 
 | Control | Current default |
 |---|---|
-| Relay no-human send limit: `LOOP_GUARD_MAX` | 256; `0` disables it; invalid values fall back to 256. Agent wakes do not count as human input. |
+| Relay no-human send limit: `LOOP_GUARD_MAX` | 0 (disabled); positive values enable it; invalid values fall back to 256. Agent wakes do not count as human input. |
 | Relay queue capacity | 200 messages per member. |
 | Relay `clientId` deduplication window | 24 hours; the adapter also keeps durable attempt records. |
 | Adapter hop markers | Tracing only; no two-hop ceiling. |

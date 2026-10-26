@@ -27,6 +27,7 @@ test("MCP diagnostic interoperates with the adapter and checks identity without 
   assert.deepEqual(methods, ["initialize", "notifications/initialized", "tools/list", "grok_status"]);
   assert.equal(result.server_version, "0.2.0");
   assert.equal(result.tools.length, 5);
+  assert.deepEqual(result.send_recipients, ["claude", "neo-codex"]);
   assert.deepEqual(result.poll, { at: h.clock.t, ok: true, queued: 0 });
   assert.deepEqual(h.relay.calls, [{ method: "GET", op: "who" }]);
   assert.equal(result.entry_auth, "authenticated");

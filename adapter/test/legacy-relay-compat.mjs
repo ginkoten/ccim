@@ -160,6 +160,7 @@ test("explicit one-time recovery against legacy who clears stop without business
   await h.tick();
   h.env.CCIM_TOKEN = token;
   h.env.AUTH_RECHECK_APPROVAL = "fixture-approved-recovery-001";
+  h.env.AUTH_RECHECK_ALLOW_BACKLOG = "fixture-approved-recovery-001";
   assert.deepEqual(await h.tick(), { polled: false, auth_recovery: { ok: true } });
   assert.deepEqual(h.calls.map(c => c.op), ["inbox?all=1", "who"]);
   assert.equal((await h.tick()).polled, true);

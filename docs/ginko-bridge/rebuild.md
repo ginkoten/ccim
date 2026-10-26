@@ -13,9 +13,9 @@
 离线复建演练：Node 24.5+，`node --test scripts/test/*.test.mjs`、adapter 和 relay 的 npm test。测试用临时目录/假凭据/本机 mock，不能证明新电脑应用能力或生产端到端已验收。故障证据与未确定触发事件见 [10月24日复盘](incident-20261024.md)。
 
 从 `https://github.com/ginkoten/ccim` clone 完整历史；升级测试会读取历史提交。
-部署机器需要 Node 22+、npm 和 Cloudflare 免费账号；**每台运行 ccim 的 Codex/Claude 客户端机器也需要 Node 22+**，
-不能只在部署机器安装。运行 MCP 示例脚本的 Grok 执行环境也需 Node 22+。
-本地验证使用 Node 24；依赖环境代理时另见 [clients 的代理版本要求](clients.md#claude-的代理环境)。
+部署机器需要 Node 24.5+、npm 和 Cloudflare 免费账号；**每台运行 ccim 的 Codex/Claude 客户端机器也需要 Node 24.5+**，
+不能只在部署机器安装。运行 MCP 示例脚本的 Grok 执行环境也需 Node 24.5+。
+本地验证使用 Node 24.16.0（要求24.5+）；依赖环境代理时另见 [clients 的代理版本要求](clients.md#claude-的代理环境)。
 SQLite Durable Objects 支持免费计划但受额度限制，见[官方说明](https://developers.cloudflare.com/durable-objects/platform/pricing/)。
 本文是操作者步骤，本次仓库整理只做本地测试及 dry-run，不部署。
 
@@ -63,15 +63,16 @@ cp wrangler.toml wrangler.local.toml
 ```
 
 编辑忽略的 `wrangler.local.toml`，把 `example-ccim-relay` 换成自己的 Worker 名。
-保留 DO bindings/migrations；不填作者域名或账号 ID。默认 `LOOP_GUARD_MAX="256"`，
-明确选择关闭才设 `"0"`。只接受非负安全整数，非法值回退 256。
+保留 DO bindings/migrations；不填作者域名或账号 ID。缺省关闭，示例显式 `LOOP_GUARD_MAX="0"`。
+保持旧关闭行为时部署前必须检查实际配置为0。只接受非负安全整数，非法值回退 256。
 旧 `LOOP_GUARD=off` 不再控制此版本，升级必须转换为 `LOOP_GUARD_MAX=0`。
 
 ```sh
 npx wrangler login
+node ../scripts/check-relay-deploy.mjs wrangler.local.toml
 npx wrangler deploy --config wrangler.local.toml --dry-run
-# 审阅并批准后执行
-npx wrangler deploy --config wrangler.local.toml
+# 检查必须为0、无--var/环境覆盖；审阅并批准后执行
+npm run deploy
 ```
 
 正式 deploy 成功后，从 Wrangler 输出的 `https://…workers.dev` 行取得 URL，
@@ -115,7 +116,7 @@ shell 命令替换或聊天中转。通过密码管理器或已授权的私密�
 若该机需代理才能访问 relay，先完成 [Claude 的代理环境](clients.md#claude-的代理环境)：
 确认 hooks 能继承已授权的 `HTTP_PROXY` / `HTTPS_PROXY`，并在当前插件缓存的
 `SessionStart`、`UserPromptSubmit`、`Stop`、`SessionEnd` 四条 ccim 命令前加
-`NODE_USE_ENV_PROXY=1`。使用 Node 22.21+ 或24.5+；只改 ccim hook，不为此修改
+`NODE_USE_ENV_PROXY=1`。使用 Node 24.5+；只改 ccim hook，不为此修改
 Claude 全局 `settings.json`。备份、JSON 示例及升级后复查步骤见链接。
 插件更新或重装会覆盖本地缓存的可能性不能忽略，更新后必须重新检查。
 无需代理的网络跳过代理修正，仍需验收监听在线。
@@ -138,7 +139,7 @@ ccim join "<channel>/claude" --if-absent --must-exist --secret-file /private/cha
 在有频道 secret 的机器、仓库根目录运行，输出路径必须为新的私有文件：
 
 ```sh
-node scripts/provision-grok.mjs "<channel>" /private/grok-member-token
+CCIM_HOME="<本频道私有home>" node scripts/provision-grok.mjs "<channel>" /private/grok-member-token "<service-handle>"
 ```
 
 脚本读 `CCIM_HOME/config.json`，默认 handle 为 `grok`（可选第三参数指定），使用 `ifAbsent:true,mustExist:true`。
@@ -152,7 +153,22 @@ npm test
 cp wrangler.toml wrangler.local.toml
 ```
 
-更换本地 Worker 名、`CCIM_RELAY`；频道和 handle 与前一步一致。
+每频道使用各自的本地配置文件，显式填写 Worker 名和 CCIM_RELAY，以及下表全部四项，禁止沿用另一频道示例默认值。provision第三参数必须等于CCIM_HANDLE。
+
+| 频道 | CCIM_CHANNEL | CCIM_HANDLE（provision第三参数） | ALLOWED_RECIPIENTS | STATE_NAMESPACE（稳定示例） | 独立Webhook例程 |
+| --- | --- | --- | --- | --- | --- |
+| 工作站 | ginko-bridge | grok | claude,neo-codex | `<relay-dataset>/ginko-bridge/grok` | Ginko-Bridge 接收 |
+| 项目 | ginkoai | ginkoai-grok | codex,claude | `<relay-dataset>/ginkoai/ginkoai-grok` | GinkoAI 桥接收 |
+
+已有批准且成员仍不存在时，按目标频道分别执行（私有路径均为占位符；不是要求现在创建）：
+
+```sh
+CCIM_HOME="/PRIVATE/workstation-home" node scripts/provision-grok.mjs ginko-bridge /PRIVATE/workstation-grok-token grok
+CCIM_HOME="/PRIVATE/ginkoai-home" node scripts/provision-grok.mjs ginkoai /PRIVATE/ginkoai-grok-token ginkoai-grok
+```
+
+名称是本项目非秘密对应关系，迁移时核实实际映射；存储标识已有值不得照表改写。两频道各有独立Worker、WEBHOOK_URL、WEBHOOK_KEY及例程，绝不共用。创建服务成员示例的第三参数分别为grok和ginkoai-grok；输出文件和CCIM_HOME同样独立。
+验收必须核对tools/list中grok_send.inputSchema.properties.to.enum等于本频道ALLOWED_RECIPIENTS，脚本send_recipients输出用于比较；任何错配先停，不发送测试业务。
 为 `STATE_NAMESPACE` 选择稳定数据集标识：普通部署或域名别名不改，换独立 relay
 才更换，且先完成[rotation](rotation.md)的任务收尾。
 

@@ -8,7 +8,7 @@ Start with [the rebuild guide](../docs/ginko-bridge/rebuild.md). See
 [client configuration](../docs/ginko-bridge/clients.md) and
 [verification](../docs/ginko-bridge/verify.md) before using real messages.
 
-Run `npm ci` then `npm test` with Node 22 or newer. The checked-in Wrangler file
+Run `npm ci` then `npm test` with Node 24.5 or newer. The checked-in Wrangler file
 contains placeholders. Copy it to ignored `wrangler.local.toml` for deployment.
 Never copy production secrets into an example file.
 

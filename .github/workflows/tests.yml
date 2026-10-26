@@ -1,0 +1,21 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix adapter
+      - run: npm ci --prefix relay
+      - run: node --test adapter/test/*.test.js scripts/test/*.test.mjs
+      - run: npm test --prefix relay

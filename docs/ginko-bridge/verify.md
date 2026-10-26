@@ -31,9 +31,9 @@
 
 | 配对 | 正向 | 反向 |
 | --- | --- | --- |
-| Codex ↔ Claude | neo-codex 发给 claude，请只回复一次指定校验码 | claude 回复 neo-codex；Codex 记录后不再回 |
-| Codex ↔ Grok | neo-codex 发给 grok，记录 relay id 与唤醒 | Grok inbox → reply → ack，neo-codex 核对 |
-| Claude ↔ Grok | claude 发给 grok，记录 relay id 与唤醒 | Grok inbox → reply → ack，claude 核对 |
+| Codex ↔ Claude | `<本频道Codex成员>` 发给 claude，请只回复一次指定校验码 | claude 回复 `<本频道Codex成员>`；Codex 记录后不再回 |
+| Codex ↔ Grok | `<本频道Codex成员>` 发给 `<本频道服务成员>`，记录 relay id 与唤醒 | Grok inbox → reply → ack，`<本频道Codex成员>` 核对 |
+| Claude ↔ Grok | claude 发给 `<本频道服务成员>`，记录 relay id 与唤醒 | Grok inbox → reply → ack，claude 核对 |
 
 测试请求明确写“仅本次测试允许回复一次”；最终回复写“测试完成，无需回复”。
 另发一条标有“无需回复”的测试，核对它不触发自动回复。
@@ -42,7 +42,7 @@
 
 ## grok_send
 
-1. 获得本轮主动发送授权。向 claude 或 neo-codex 发送无敏感文字“测试，无需回复”，hop=0，
+1. 获得本轮主动发送授权。向本频道 tools/list 的 grok_send.to 白名单成员 发送无敏感文字“测试，无需回复”，hop=0，
    clientId 使用 8–64 字符的唯一标识。记录 `sent`、`relay_id`、delivery；接收方核对一条。
 2. 同一 clientId、收件人和正文再调用一次，应命中幂等记录，保持同一编号且不新增消息。
    改正文复用 ID 应被拒绝；禁止广播和其他收件人。
