@@ -1,0 +1,4 @@
+[
+  {"channel":"workspace-example","relay":"https://relay.example.invalid","home":"/PRIVATE/ccim-workspace","session":"00000000-0000-0000-0000-000000000001","sessionLink":"/HOME/.ccim/sessions/00000000-0000-0000-0000-000000000001.json","worker":"workspace-adapter-example","stateNamespace":"relay/workspace/grok","port":null,"recipients":["neo-codex","claude"],"bearerEnv":"WORKSPACE_MCP_BEARER","serviceHandle":"grok"},
+  {"channel":"project-example","relay":"https://relay.example.invalid","home":"/PRIVATE/ccim-project","session":"00000000-0000-0000-0000-000000000002","sessionLink":"/HOME/.ccim/sessions/00000000-0000-0000-0000-000000000002.json","worker":"project-adapter-example","stateNamespace":"relay/project/grok","port":null,"recipients":["codex","claude"],"bearerEnv":"PROJECT_MCP_BEARER","serviceHandle":"project-grok"}
+]

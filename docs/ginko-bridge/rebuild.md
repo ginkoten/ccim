@@ -1,5 +1,17 @@
 # 重建 Ginko-Bridge
 
+## 新电脑先分清首次安装与接替
+
+本页是主入口，配合 [应用接收端](project-receivers.md) 使用应用内专用对话与 `~/.ccim/sessions` 的既有发现链接，不以终端接收器作为主路线。
+首次全新频道才按下文 guarded 创建；换电脑接替已有频道不是首次创建。先恢复正式应用入口、核对旧接收者与未完成/uncertain 账本、单实例所有权和获准凭据交接，再按 [rotation](rotation.md) 操作。已有成员返回409或结果未知立即停下；离线不重 join，不借旧对话ID伪装新会话。
+
+复制 `scripts/channel-layout.example.json` 到自己的未提交配置，仅填非秘密映射，用 `node scripts/check-channel-layout.mjs /path/layout.json` 离线检查。每频道列出 relay/channel、私有 CCIM_HOME、应用真实 session、默认发现链接、独立 adapter Worker、稳定 STATE_NAMESPACE、服务成员、允许收件人和安全变量名。示例 UUID/路径全部是占位符，不可用于实际绑定。
+应用 hook 通常无需自建 TCP 端口，填 null；确有获准本地端口才登记并检查独占。脚本只检查声明，不读取会话文件或核实监听；运行时还要在本频道应用对话执行标准 who/status、核对 owner 与单实例，不杀其他项目进程。
+
+两个频道不得混用 token、MCP Bearer 环境变量、session 链接、Worker 或存储标识；相同 relay 可以共用。此预检采用每频道独立 home 的保守配置，不支持把同一 home 的复杂共享布局自动判为安全。凭据只通过密码管理器/受控环境安全注入；不得把 session、私有配置、token 文件或线上导出包提交 Git。
+
+离线复建演练：Node 24.5+，`node --test scripts/test/*.test.mjs`、adapter 和 relay 的 npm test。测试用临时目录/假凭据/本机 mock，不能证明新电脑应用能力或生产端到端已验收。故障证据与未确定触发事件见 [10月24日复盘](incident-20261024.md)。
+
 从 `https://github.com/ginkoten/ccim` clone 完整历史；升级测试会读取历史提交。
 部署机器需要 Node 22+、npm 和 Cloudflare 免费账号；**每台运行 ccim 的 Codex/Claude 客户端机器也需要 Node 22+**，
 不能只在部署机器安装。运行 MCP 示例脚本的 Grok 执行环境也需 Node 22+。
@@ -7,13 +19,21 @@
 SQLite Durable Objects 支持免费计划但受额度限制，见[官方说明](https://developers.cloudflare.com/durable-objects/platform/pricing/)。
 本文是操作者步骤，本次仓库整理只做本地测试及 dry-run，不部署。
 
+## 单频道最短路径
+
+新电脑只建一个频道时：relay → 应用能力与插件/信任 → 第一个 Codex 成员创建频道 → Claude 自己首次加入 → 可选 Grok adapter → 无敏感互通验收。
+默认使用 `~/.ccim`，不需要额外 home、session 链接或第二个 adapter。已有桥再加项目才看 [应用接收端的多频道映射](project-receivers.md)。
+实际应用身份、可执行 join、hook 注册和新电脑清单统一在 [应用接收端](project-receivers.md)。
+**当前不是新电脑一键配置工具**：Claude 应用可能不提供所需 socket/hooks，Codex 的旧 handler 排除和新定义信任须在实际产品上确认。
+以下 `<channel>`、`<codex-handle>`、`/private/...` 均须替换为自己的获准名称/路径；历史内容工作站使用 `ginko-bridge/neo-codex`；这些实际旧名称不作为新机默认值。
+
 ## 凭据与生成顺序
 
 | 名称 | 何时取得 | 私有存放类别 |
 | --- | --- | --- |
 | Wrangler 登录凭据 | 浏览器授权登录 | Wrangler 用户配置 |
 | 频道 secret | 第一个成员创建频道 | `CCIM_HOME/config.json`，0600 |
-| neo-codex / claude token | 各自 join 后 | 各自 `CCIM_HOME/sessions/`，0600 |
+| 本地 Codex / Claude token | 各自 join 后 | 各自 `CCIM_HOME/sessions/`，0600 |
 | grok token / `CCIM_TOKEN` | 频道存在后 guarded join | 私有文件、adapter Worker secret |
 | `MCP_BEARER` | 密码管理器生成至少 32 随机字节 | Worker secret、Grok 安全变量 |
 | `WEBHOOK_URL` / `WEBHOOK_KEY` | Grok 创建例程后 | Grok 账号、adapter Worker secrets |
@@ -69,10 +89,11 @@ OAuth 默认关闭，relay `/mcp` tools/list 只暴露
 将实际 relay URL 设置到 `CCIM_RELAY`。首次在专用 Codex 接收 chat 执行：
 
 ```sh
-ccim join ginko-bridge/neo-codex --if-absent
+ccim join "<channel>/<codex-handle>" --if-absent
 ccim listen
 ```
 
+其中 `ccim listen` 也在 **Codex 应用接收对话里让它执行**；不是另开终端版 Codex 或在独立实施线程启动监听。
 此步生成频道 secret 和成员 token，保存到私有 `CCIM_HOME`，不回显。
 已存在频道/成员、凭据不匹配时停止，不能换名字绕过。
 ### 不回显地导出频道 secret
@@ -80,7 +101,7 @@ ccim listen
 在已经创建频道的机器，从仓库根目录执行：
 
 ```sh
-node scripts/export-channel-secret.mjs ginko-bridge "$HOME/.config/ginko-bridge/channel-secret"
+node scripts/export-channel-secret.mjs "<channel>" /private/channel-secret
 ```
 
 脚本读取 `$CCIM_HOME/config.json`（未设置 CCIM_HOME 时为 `$HOME/.ccim/config.json`），
@@ -102,7 +123,7 @@ Claude 全局 `settings.json`。备份、JSON 示例及升级后复查步骤见�
 首次在尚未绑定成员的 Claude 专用会话运行：
 
 ```sh
-ccim join ginko-bridge/claude --if-absent --must-exist --secret-file /private/channel-secret
+ccim join "<channel>/claude" --if-absent --must-exist --secret-file /private/channel-secret
 ```
 
 `/private/channel-secret` 是示例，替换为该机 0600 文件。成员 token 由 join 生成，
@@ -117,10 +138,10 @@ ccim join ginko-bridge/claude --if-absent --must-exist --secret-file /private/ch
 在有频道 secret 的机器、仓库根目录运行，输出路径必须为新的私有文件：
 
 ```sh
-node scripts/provision-grok.mjs ginko-bridge /private/grok-member-token
+node scripts/provision-grok.mjs "<channel>" /private/grok-member-token
 ```
 
-脚本读 `CCIM_HOME/config.json`，固定 `grok` 并使用 `ifAbsent:true,mustExist:true`。
+脚本读 `CCIM_HOME/config.json`，默认 handle 为 `grok`（可选第三参数指定），使用 `ifAbsent:true,mustExist:true`。
 不绑定 chat、不启动 listener、不打印 token。已有输出文件会拒绝；超时/失败保留
 空文件标记，停止，不直接重试或改成员名。先私下核对 who 和凭据文件，再决定恢复。
 
@@ -135,13 +156,15 @@ cp wrangler.toml wrangler.local.toml
 为 `STATE_NAMESPACE` 选择稳定数据集标识：普通部署或域名别名不改，换独立 relay
 才更换，且先完成[rotation](rotation.md)的任务收尾。
 
-先确认 Grok 能安全调用 Bearer MCP，并创建例程取得 webhook URL/key。
+先确认 Grok 能安全调用 Bearer MCP。若必须先取得 MCP 地址才能建例程，可先部署 MCP，暂不设置 `WEBHOOK_URL` / `WEBHOOK_KEY`；缺少任一项时不发唤醒请求，不填可触达占位 URL。例程创建后再按授权补这两项。缺 `CCIM_TOKEN` 时 MCP 初始化/工具发现可验，relay 轮询与投递不可宣称通过。
 用密码管理器生成 `MCP_BEARER`。以下 secret put 在终端隐藏输入，不在普通 shell
 命令行粘贴值；首个 secret put 可能创建占位 Worker，也是需核对账号/名称的云端变更。
 
 ```sh
 npx wrangler secret put CCIM_TOKEN --config wrangler.local.toml < /private/grok-member-token
 npx wrangler secret put MCP_BEARER --config wrangler.local.toml
+
+# 仅取得真实例程字段后补充这两项；否则跳过
 npx wrangler secret put WEBHOOK_URL --config wrangler.local.toml
 npx wrangler secret put WEBHOOK_KEY --config wrangler.local.toml
 npx wrangler deploy --config wrangler.local.toml --dry-run
@@ -178,5 +201,5 @@ Grok 配置 adapter URL 加 `/mcp`，Bearer 是 `MCP_BEARER`，不是 relay toke
 initialize 应返回 0.2.0，tools/list 应有五工具。
 
 只验证占位打包时，各包运行 `npx --no-install wrangler deploy --dry-run`，不上传。
-`node --test scripts/test/*.mjs` 验证安全 provisioning 与 CLI 重建步骤。
+`node --test scripts/test/*.test.mjs` 验证安全 provisioning 与 CLI 重建步骤。
 换电脑、账号不等于必须删频道或全量轮换，按[rotation](rotation.md)分别处理。

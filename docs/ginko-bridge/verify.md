@@ -1,5 +1,18 @@
 # 无敏感验收
 
+## 恢复前的身份分层证据
+
+验收摘要并列记录以下证据及时间，不能用某一层200替代其余层：
+
+| 检查 | 证据与限制 |
+| --- | --- |
+| 直接中继身份 | 在获准接口对正确 relay/channel GET who，确认 you；online=false 不代表身份失败 |
+| 部署写入 | 唯一目标 Worker 的版本、变量/secret绑定名、DO/STATE_NAMESPACE；不得回显secret，写入不等于认证成功 |
+| Worker 实际绑定 | 已安全注入环境运行 `node scripts/check-adapter-mcp.mjs --probe-identity`；source=worker_bound_identity，checked_at及 downstream_auth.ok=true |
+| 历史停止/cron | auth_stop_at、blocked 与 poll.at/ok 分开；成功探测不解除暂停，缓存错误须带原始时间；观察至少一个实际cron周期 |
+
+检查脚本退出0只表示检查完成。被拒的凭据读取路径不能用新 helper 绕过；请已有获准环境转交脱敏结果。业务恢复另按 [服务鉴权](service-auth.md)、[隔离策略](backlog-isolation.md)；边界采用本次确认的序号，不能照抄历史202。先验证隔离入口和未读保留，再执行获批单次恢复。原文不可得不凭摘要重建；accepted/uncertain 不换ID重发。
+
 本项目整理不执行线上测试、不发送消息、不接管 handle。下面步骤由各专用接收会话在取得本轮授权后执行。
 本地自动化证据见 [acceptance.md](acceptance.md)。历史 #43/#44 只属于已有回报，不是本轮实测。
 

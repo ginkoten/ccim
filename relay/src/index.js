@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { audit, lifecycle, clearChannel } from "./lifecycle.js";
 import { loopGuardMax } from "./loop-guard.js";
 import { handleMcp } from "./mcp.js";
 import { handleOAuth } from "./oauth.js";
@@ -51,6 +52,7 @@ export class Channel extends DurableObject {
     const handle = await this.auth(req);
     if (!handle) return json(401, { error: "unauthorized" });
 
+    if (op === "lifecycle" && req.method === "GET") return json(200, { events: await lifecycle(this.ctx.storage), limit: 256 });
     if (op === "listen") return this.listen(req, handle);
     if (op === "who" && req.method === "GET") return json(200, { you: handle, members: await this.members() });
     if (op === "inbox" && req.method === "GET") {
@@ -63,51 +65,63 @@ export class Channel extends DurableObject {
     if (op === "ack") return json(200, { ok: await this.ack(handle, body.ids) });
     if (op === "human") return json(200, { ok: (await this.ctx.storage.put("streak", 0), true) });
     if (op === "focus") return this.focus(handle, !!body.on);
-    if (op === "leave") return this.leave(handle);
+    if (op === "leave") return this.leave(handle, req);
     return json(404, { error: "not_found" });
   }
 
   async join(req) {
-    // ifAbsent: refuse instead of taking over an existing handle. mustExist: never create the channel.
-    // Clients omitting the guards retain the explicit newest-join-wins behaviour.
+    // Existing service provisioners require both guards; explicit CLI takeover keeps its existing semantics.
     const { handle, ifAbsent, mustExist } = await req.json().catch(() => ({}));
     const secret = req.headers.get("x-ccim-secret") || "";
     if (!NAME.test(handle || "")) return json(400, { error: "bad_handle" });
-
-    let channel = await this.ctx.storage.get("channel");
-    const created = !channel;
-    if (!channel) {
-      if (mustExist) return json(404, { error: "no_such_channel" });
-      if (secret.length < 16) return json(400, { error: "secret_too_short" });
-      channel = { secretHash: await sha256(secret), createdAt: Date.now() };
-      await this.ctx.storage.put("channel", channel);
-    } else if ((await sha256(secret)) !== channel.secretHash) {
-      return json(403, { error: "wrong_secret" });
-    }
-
-    // The newest join owns the handle: that is how a handle stays bound to exactly one session.
-    const old = await this.ctx.storage.get(`m:${handle}`);
-    if (old && ifAbsent) return json(409, { error: "handle_taken" });
-    if (old) {
-      await this.ctx.storage.delete(`tok:${old.tokenHash}`);
-      this.closeSockets(handle, TAKEN_OVER, "taken_over");
-    }
+    const channelName = new URL(req.url).pathname.split("/")[2];
+    const secretHash = await sha256(secret);
     const token = hex(crypto.getRandomValues(new Uint8Array(32)));
     const tokenHash = await sha256(token);
-    await this.ctx.storage.put(`m:${handle}`, { tokenHash, focus: false });
-    await this.ctx.storage.put(`tok:${tokenHash}`, handle);
-    return json(200, { token, created, members: await this.members() });
+    const result = await this.ctx.storage.transaction(async tx => {
+      const channel = await tx.get("channel");
+      if (!channel && mustExist) return { status: 404, error: "no_such_channel" };
+      if (!channel && secret.length < 16) return { status: 400, error: "secret_too_short" };
+      if (channel && secretHash !== channel.secretHash) return { status: 403, error: "wrong_secret" };
+      const old = await tx.get(`m:${handle}`);
+      if (old && ifAbsent) return { status: 409, error: "handle_taken" };
+      const generation = ((await tx.get("memberGeneration")) || 0) + 1;
+      if (!channel) await tx.put("channel", { secretHash, createdAt: Date.now() });
+      if (old) await tx.delete(`tok:${old.tokenHash}`);
+      await tx.put({
+        memberGeneration: generation,
+        [`m:${handle}`]: { tokenHash, focus: false, generation },
+        [`tok:${tokenHash}`]: handle,
+      });
+      await audit(tx, { channel: channelName, member: handle, action: old ? "replace" : "join",
+        reason: old ? "explicit_join_replaced_member" : "member_joined", generation });
+      return { status: 200, created: !channel, replaced: !!old };
+    });
+    if (result.status !== 200) return json(result.status, { error: result.error });
+    if (result.replaced) this.closeSockets(handle, TAKEN_OVER, "taken_over");
+    return json(200, { token, created: result.created, members: await this.members() });
   }
 
-  // Anyone holding the secret can delete: every member got in with it, so it is the only authority the channel has.
+  // Deletion revokes all members and queues, but leaves bounded non-secret audit evidence.
   async remove(req) {
-    const channel = await this.ctx.storage.get("channel");
-    if (!channel) return json(404, { error: "no_such_channel" });
-    if ((await sha256(req.headers.get("x-ccim-secret") || "")) !== channel.secretHash) return json(403, { error: "wrong_secret" });
+    const secretHash = await sha256(req.headers.get("x-ccim-secret") || "");
+    const channelName = new URL(req.url).pathname.split("/")[2];
+    const result = await this.ctx.storage.transaction(async tx => {
+      const channel = await tx.get("channel");
+      if (!channel) return { status: 404, error: "no_such_channel" };
+      if (secretHash !== channel.secretHash) return { status: 403, error: "wrong_secret" };
+      for (const [key, member] of await tx.list({ prefix: "m:" })) {
+        await audit(tx, { channel: channelName, member: key.slice(2), action: "remove",
+          reason: "channel_deleted", generation: member.generation });
+      }
+      await audit(tx, { channel: channelName, member: null, action: "delete", reason: "channel_deleted" });
+      await clearChannel(tx);
+      return { status: 200 };
+    });
+    if (result.status !== 200) return json(result.status, { error: result.error });
     for (const ws of this.ctx.getWebSockets()) {
       try { ws.close(DELETED, "deleted"); } catch {}
     }
-    await this.ctx.storage.deleteAll();
     return json(200, { ok: true });
   }
 
@@ -206,10 +220,20 @@ export class Channel extends DurableObject {
     return json(200, { focus: on });
   }
 
-  async leave(handle) {
-    const member = await this.ctx.storage.get(`m:${handle}`);
-    const queued = await this.ctx.storage.list({ prefix: `q:${handle}:` });
-    await this.ctx.storage.delete([`m:${handle}`, `tok:${member.tokenHash}`, ...queued.keys()]);
+  async leave(handle, req) {
+    const channelName = new URL(req.url).pathname.split("/")[2];
+    // Revalidate in the transaction so an in-flight old-token leave cannot remove a replacement member.
+    const tokenHash = await sha256((req.headers.get("authorization") || "").replace(/^Bearer /, ""));
+    const removed = await this.ctx.storage.transaction(async tx => {
+      const member = await tx.get(`m:${handle}`);
+      if (!member || member.tokenHash !== tokenHash) return false;
+      const queued = await tx.list({ prefix: `q:${handle}:` });
+      const keys = [`m:${handle}`, `tok:${member.tokenHash}`, ...queued.keys()];
+      for (let i = 0; i < keys.length; i += 128) await tx.delete(keys.slice(i, i + 128));
+      await audit(tx, { channel: channelName, member: handle, action: "leave", reason: "member_left", generation: member.generation });
+      return true;
+    });
+    if (!removed) return json(401, { error: "unauthorized" });
     this.closeSockets(handle, TAKEN_OVER, "left");
     return json(200, { ok: true });
   }

@@ -39,3 +39,8 @@
 - 本机：CCIM_HOME 的 config/session 文件按私密备份处理；不要输出、提交或贴聊天；备份也要限制权限。
 - Grok：账号自己的 secret store 与例程配置；旧账号移除凭据后再关闭旧例程。
 - OAuth：新 issuer 或泄露时撤销授权并重新连接；OAUTH_ENC_KEY 轮换会影响已有加密状态，先读上游 OAuth 设计与部署测试，不能随意替换。
+# 服务恢复与回滚补充
+
+接替电脑优先恢复现有身份与数据，不因离线重join。先记录代码版本、配置绑定、DO/STATE_NAMESPACE和未完成账本；明确旧所有者停止且无在途凭据修复。服务创建用 ifAbsent/mustExist，冲突或未知结果停查。凭据只写经确认的单Worker安全入口，不输出值。
+
+回滚必须保留 [隔离边界](backlog-isolation.md) 与原clientId/uncertain账本。恢复异常可经明确批准设置 BACKLOG_HOLD=on 停止业务，先验暂停再回滚兼容代码；去掉 AUTH_RECHECK_APPROVAL 不会重新暂停，旧无隔离代码不能直接恢复运行。共享relay若后来发布新版需显式 LOOP_GUARD_MAX=0 才保持旧 LOOP_GUARD=off 行为，不能仅保留旧变量。

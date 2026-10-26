@@ -11,6 +11,8 @@
 
 import { config, parseHop, dayKey, makeLogger } from "./util.js";
 import { makeRelay } from "./relay.js";
+import { backlogPolicy } from "./backlog.js";
+import { guardRelay } from "./auth.js";
 import { scopedStorage } from "./storage.js";
 
 export const STAGE_ORDER = ["recorded", "woken", "acked", "replied"];
@@ -25,7 +27,8 @@ const openKey = (id) => `open:${String(id).padStart(12, "0")}`;
 export function makeContext({ storage, env, fetch, now = () => Date.now(), log }) {
   const cfg = config(env);
   storage = scopedStorage(storage, env.STATE_NAMESPACE || "");
-  return { storage, env, cfg, fetch, now, log: log || makeLogger(env), relay: makeRelay(cfg, env, { fetch, storage }) };
+  const backlog = backlogPolicy(storage, env, cfg, now);
+  return { storage, env, cfg, fetch, now, backlog, log: log || makeLogger(env), relay: guardRelay(makeRelay(cfg, env, { fetch, storage }), { storage, cfg, now, backlog }) };
 }
 
 export function stageOf(meta) {
@@ -47,6 +50,7 @@ export function classify(msg, cfg) {
 export async function ingest(ctx, messages) {
   const fresh = [];
   for (const m of messages) {
+    if (await ctx.backlog.rejection([m.id])) continue;
     if (!Number.isInteger(m.id) || m.id < 1) continue;
     const existing = await ctx.storage.get(key(m.id));
     if (existing) {
@@ -80,10 +84,17 @@ async function openMetas(ctx) {
 // One cron tick: peek, record, decide, wake at most once.
 export async function tick(ctx) {
   const now = ctx.now();
+  const fence = await ctx.backlog.initialize();
+  if (fence.error) return { polled: false, error: fence.error };
+  if ((await ctx.relay.authState())?.blocked) {
+    // Only an operator's explicit non-secret deployment marker enables one recovery probe.
+    if (ctx.env.AUTH_RECHECK_APPROVAL) return { polled: false, auth_recovery: await ctx.relay.recheck(ctx.env.AUTH_RECHECK_APPROVAL, ctx.env.AUTH_RECHECK_SUPERSEDES) };
+    return { polled: false, error: "downstream_auth_blocked" };
+  }
   const peek = await ctx.relay.peek();
   if (!peek.ok) {
-    await ctx.storage.put("poll", { at: now, ok: false, error: peek.error, status: peek.status });
-    ctx.log("poll_failed", { status: peek.status, error: peek.error });
+    await ctx.storage.put("poll", { at: now, ok: false, error: peek.status === 401 ? "downstream_http_401" : peek.status === 0 ? "network" : "poll_failed", status: peek.status });
+    ctx.log("poll_failed", { status: peek.status, error: peek.status === 401 ? "downstream_http_401" : "poll_failed" });
     return { polled: false, error: peek.error };
   }
   await ctx.storage.put("poll", { at: now, ok: true, queued: peek.messages.length });
@@ -92,7 +103,8 @@ export async function tick(ctx) {
 
   // Open messages no longer in the relay queue were acked somewhere else: stop waking for them.
   const live = new Set(peek.messages.map((m) => m.id));
-  const open = await openMetas(ctx);
+  const open = [];
+  for (const meta of await openMetas(ctx)) if (!(await ctx.backlog.rejection([meta.id]))) open.push(meta);
   for (const meta of open) {
     if (!live.has(meta.id)) {
       meta.stages.gone = now;
@@ -177,9 +189,16 @@ export async function summary(ctx) {
   const now = ctx.now();
   const day = dayKey(now, ctx.cfg.dayOffsetMs);
   return {
+    backlog: await ctx.backlog.status(),
     channel: ctx.cfg.channel,
     handle: ctx.cfg.handle,
     relay_mode: ctx.cfg.relayMode,
+    health: {
+      entry_auth: "authenticated",
+      binding: { channel: ctx.cfg.channel, handle: ctx.cfg.handle, relay_mode: ctx.cfg.relayMode,
+        relay_origin: publicOrigin(ctx.cfg.relay), state_namespace: ctx.env.STATE_NAMESPACE || "" },
+      downstream_auth: (await ctx.relay.authState()) || { blocked: false, reason: "not_checked" },
+    },
     poll: (await ctx.storage.get("poll")) || null,
     open: (await ctx.storage.list({ prefix: "open:" })).size,
     wakes_today: (await ctx.storage.get(`day:${day}`)) || 0,
@@ -194,4 +213,8 @@ export async function summary(ctx) {
 export async function recentMetas(ctx, limit = 20) {
   const all = await ctx.storage.list({ prefix: "msg:", reverse: true, limit });
   return [...all.values()];
+}
+
+function publicOrigin(value) {
+  try { return new URL(value).origin; } catch { return null; }
 }

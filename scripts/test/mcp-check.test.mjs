@@ -2,12 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { inspectAdapter } from "../check-adapter-mcp.mjs";
+import { inspectAdapter, adapterOptionsFromEnv } from "../check-adapter-mcp.mjs";
 import { harness, MCP_BEARER } from "../../adapter/test/helpers.js";
 
 const options = { url: "https://adapter.example.invalid/mcp", bearer: MCP_BEARER };
 
-test("MCP diagnostic interoperates with the adapter and does not read, ack, send or wake", async () => {
+test("explicit probe flag composes with independent channel variables without accepting credential arguments", () => {
+  assert.deepEqual(adapterOptionsFromEnv(["--probe-identity","--url-env","PROJECT_URL","--bearer-env","PROJECT_BEARER"], {PROJECT_URL:"https://project.example.invalid/mcp",PROJECT_BEARER:"fixture"}), {url:"https://project.example.invalid/mcp",bearer:"fixture",probeIdentity:true});
+  for(const args of [["--probe-identity","--probe-identity"],["--bearer-env","NAME=value"],["--url-env"]]) assert.throws(()=>adapterOptionsFromEnv(args,{}));
+});
+
+test("MCP diagnostic interoperates with the adapter and checks identity without reading messages, ack, send or wake", async () => {
   const h = harness();
   await h.tick();
   h.relay.calls.length = 0;
@@ -23,7 +28,9 @@ test("MCP diagnostic interoperates with the adapter and does not read, ack, send
   assert.equal(result.server_version, "0.2.0");
   assert.equal(result.tools.length, 5);
   assert.deepEqual(result.poll, { at: h.clock.t, ok: true, queued: 0 });
-  assert.equal(h.relay.calls.length, 0);
+  assert.deepEqual(h.relay.calls, [{ method: "GET", op: "who" }]);
+  assert.equal(result.entry_auth, "authenticated");
+  assert.equal(result.downstream_auth.ok, true);
   assert.equal(h.webhook.calls.length, 0);
   assert.ok(!JSON.stringify(result).includes(MCP_BEARER));
 });

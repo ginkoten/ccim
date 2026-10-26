@@ -16,6 +16,7 @@ export function publicAttempt(record) {
 }
 
 export async function sendReply(ctx, meta, { part, text, hop, clientId }) {
+  if (await ctx.backlog?.rejection([meta.id])) return { reply_to_id: meta.id, part, clientId, to: meta.from, hop, outcome: "rejected", reason: "backlog_quarantined", retry_allowed: false };
   const fingerprint = await sha256(JSON.stringify([meta.from, text, false]));
   const attempt = {
     reply_to_id: meta.id, part, clientId, to: meta.from, hop, fingerprint,
