@@ -27,7 +27,7 @@ new_sqlite_classes = ["Auth"]
 # Remote MCP + OAuth. OAuth and the four ccim_* tools stay off until the OAUTH_ENC_KEY secret is set
 # (32 random bytes, base64): `wrangler secret put OAUTH_ENC_KEY`.
 [vars]
-LOOP_GUARD_MAX = "256"
+LOOP_GUARD_MAX = "0"
 # Optional OAuth only. Keep disabled until the whole configuration is ready.
 # OAUTH_ISSUER = "https://relay.example.invalid"
 # MCP_ALLOWED_BINDINGS = "example-channel/example-member"

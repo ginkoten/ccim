@@ -8,7 +8,7 @@
     "test": "node --test test/*.test.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24.5.0"
   },
   "devDependencies": {
     "wrangler": "^4.151.2"

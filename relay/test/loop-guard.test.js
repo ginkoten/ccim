@@ -61,18 +61,19 @@ after(async () => {
   rmSync(work, { recursive: true, force: true });
 });
 
-test("LOOP_GUARD_MAX=0 accepts more than 24 sends; deduplication still applies", async () => {
-  await start("0");
+test("unset LOOP_GUARD_MAX accepts more than 256 sends; deduplication still applies", async () => {
+  await start();
   alice = (await call("join", { handle: "alice", ifAbsent: true })).data.token;
   bob = (await call("join", { handle: "bob", ifAbsent: true, mustExist: true })).data.token;
   assert.ok(alice && bob);
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 300; i++) {
     const id = `guard-test-${i}`;
     const sent = await send(id);
     assert.equal(sent.status, 200);
     const duplicate = await send(id);
     assert.equal(duplicate.data.id, sent.data.id);
     assert.equal(duplicate.data.duplicate, true);
+    if (i < 270) await call("ack", { ids: [sent.data.id] }, bob);
   }
   assert.equal((await call("inbox", undefined, bob)).data.messages.length, 30);
 });

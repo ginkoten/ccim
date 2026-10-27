@@ -1,0 +1,15 @@
+# 未读旧消息隔离
+
+仅目标adapter设置非秘密BACKLOG_THROUGH_ID为relay确认的一条自发诊断标记消息ID。该标记定义频道序列边界：ID小于等于边界的消息全部隔离（包括迟到/重复递送、未在初始快照中出现的旧ID），更大ID才属于恢复后的新消息。不是业务最初发起时间或客户端墙钟边界；若外部系统重新发送旧任务并产生新ID，不能自动识别为同一业务，仍须遵守原任务去重和取消记录。
+
+首次cron在鉴权停止之前以事务持久化固定边界及relay/channel/handle绑定。边界不可降低/替换，配置删除也不会删除持久隔离；配置或绑定冲突、损坏状态、未完成初始化时业务入口失败关闭。普通health只读，不安装边界。原namespace、消息、open、reply、send、pending和uncertain账本不被重置。
+
+正常peek只向业务返回新消息；ingest及cron遍历旧open项时跳过隔离ID，不标gone/acked，不重试旧wake。显式inbox(ids)、reply、混合ACK、send(source_message_id)拒绝隔离ID；reply底层另有保护，ACK底层另有保护。继续消息必须带可放行的source_message_id；无source的新hop0发送仍可用。普通status可以查历史元数据，不返回旧正文或允许执行。accepted/uncertain/clientId/part去重逻辑保留。
+
+现有relay GET inbox?all=1返回完整成员未读队列，没有分页，队列上限200。安装前后无ACK读取用于核对ID与内容哈希，正文不落报告；标记自己也保留未读。若队列已满不能插入标记/接收新消息，则保持暂停并报告容量缺口，不能删除或ACK旧消息腾空间。标记发送必须独占意图、固定clientId；结果不确定先查，不重复发送。频道被删除重建或迁移不在此恢复许可范围内，不能靠换namespace继续。
+
+部署时先保持auth blocked，等待cron安装持久边界；验证隔离入口、旧消息未消失及双端身份通过后，才允许唯一AUTH_RECHECK_APPROVAL恢复。首次恢复tick仅GET who，后续tick只唤醒新ID。线上诊断新消息须明确无需回复、无业务任务；隔离消息不得作为真实业务测试。解除隔离/处理旧积压需独立决定，不提供自动释放入口。
+
+异常时可设置仅该Worker的BACKLOG_HOLD=on恢复业务暂停，无需伪造401或更换凭据；cron及所有业务入口失败关闭，身份诊断仍只读可用。该标记不会清除持久隔离或修改账本；off/未设置不覆盖原auth停止。不能在隔离或验收错误时自动循环重试恢复。
+
+恢复硬门槛：没有已安装持久边界时，恢复检查返回backlog_isolation_required且不消耗批准号。只有明确批准处理旧队列，才将AUTH_RECHECK_ALLOW_BACKLOG设为本次AUTH_RECHECK_APPROVAL的同一编号；普通身份修复不隐含该许可。冲突、损坏或hold不能用此例外绕过。

@@ -3,6 +3,7 @@
 export const SECRET_NAMES = ["CCIM_TOKEN", "WEBHOOK_URL", "WEBHOOK_KEY", "MCP_BEARER", "OAUTH_REFRESH_TOKEN", "OAUTH_CLIENT_ID"];
 
 export function config(env = {}) {
+  const handle = env.CCIM_HANDLE || "grok";
   const int = (name, dflt) => {
     const n = Number.parseInt(env[name] ?? "", 10);
     return Number.isFinite(n) && n >= 0 ? n : dflt;
@@ -10,12 +11,21 @@ export function config(env = {}) {
   return {
     relay: String(env.CCIM_RELAY || "https://relay.example.invalid").replace(/\/$/, ""),
     channel: env.CCIM_CHANNEL || "ginko-bridge",
-    handle: env.CCIM_HANDLE || "grok",
+    handle,
+    allowedRecipients: allowedRecipients(env, handle),
     relayMode: env.RELAY_MODE === "author-mcp" ? "author-mcp" : "direct",
     mcpEnabled: env.MCP_ENABLED !== "off",
     wakeMaxAttempts: int("WAKE_MAX_ATTEMPTS", 5),
     dayOffsetMs: int("DAY_TZ_OFFSET_MIN", 480) * 60 * 1000,
   };
+}
+
+function allowedRecipients(env, handle) {
+  const entries = String(env.ALLOWED_RECIPIENTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const valid = entries.filter((s) => /^[a-z0-9][a-z0-9_-]{0,31}$/.test(s));
+  if (valid.length !== entries.length) makeLogger(env)("invalid_allowed_recipients_ignored");
+  const recipients = [...new Set(valid)].filter((s) => s !== handle);
+  return recipients.length ? recipients : ["claude", "neo-codex"].filter((s) => s !== handle);
 }
 
 // Replaces every configured secret value (and anything that looks like a bearer key) in a string.

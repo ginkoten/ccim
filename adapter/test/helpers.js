@@ -60,6 +60,7 @@ export class FakeRelay {
   handle(method, op, body, auth) {
     if (auth !== `Bearer ${TOKEN}`) return [401, { error: "unauthorized" }];
     const me = "grok";
+    if (op === "who" && method === "GET") return [200, { you: me, members: this.members.map(handle => ({ handle, online: false })) }];
     if (op === "inbox?all=1" && method === "GET") return [200, { messages: [...this.queues.get(me).values()].sort((a, b) => a.id - b.id) }];
     if (op === "ack" && method === "POST") { for (const id of body.ids) this.queues.get(me).delete(id); return [200, { ok: true }]; }
     if (op === "send" && method === "POST") {

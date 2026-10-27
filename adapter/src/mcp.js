@@ -1,10 +1,10 @@
 // Remote MCP endpoint for the Grok Bot (Streamable HTTP, stateless, JSON responses only), modelled on the relay's
 // own endpoint (relay/src/mcp.js:85-141). Auth is one bearer secret (MCP_BEARER) that the Bot sends as a header.
 //
-// All tools are bound to the grok member this Worker holds. Proactive sends have a fixed recipient allowlist.
+// All tools are bound to this Worker's configured member and recipient allowlist.
 
 import { STAGE_CN, stageOf, ingest, getMeta, markAcked, summary, recentMetas } from "./core.js";
-import { autoTag, safeEqual, parseHop, redact } from "./util.js";
+import { autoTag, safeEqual, parseHop, redact, config } from "./util.js";
 import { sendReply, replyAttempts, publicAttempt } from "./replies.js";
 import { sendProactive, sendStatus, publicSend } from "./sends.js";
 
@@ -19,12 +19,12 @@ const idList = { type: "array", items: { type: "integer", minimum: 1 }, minItems
 const clientIdSchema = { type: "string", pattern: "^[A-Za-z0-9_-]{8,64}$", description: "Stable id for one message. Never change it to retry an uncertain send." };
 const validClientId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(id);
 
-export const TOOLS = [
+export const toolsFor = (cfg) => [
   {
     name: "grok_send",
-    description: "Send an authorized proactive message as grok, only to claude or neo-codex; no broadcast. For replies prefer grok_reply. hop is the incoming chain hop (0 for a new message); hop is retained for tracing without an upper quota. If continuing a received message, also provide source_message_id. Check outcome: sent has relay_id; rejected was refused; uncertain may be delivered. Never resend uncertain with any clientId; use grok_status(clientId) and reconcile with the recipient. No adapter send-frequency or daily quota applies.",
+    description: `Send an authorized proactive message as ${cfg.handle}, only to ${cfg.allowedRecipients.join(" or ")}; no broadcast. For replies prefer grok_reply. grok_send must include "hop": 0 for a new message; for a continuation provide the incoming chain hop and source_message_id. hop is retained for tracing without an upper quota. Check outcome: sent has relay_id; rejected was refused; uncertain may be delivered. Never resend uncertain with any clientId; use grok_status(clientId) and reconcile with the recipient. No adapter send-frequency or daily quota applies.`,
     inputSchema: object({
-      to: { type: "string", enum: ["claude", "neo-codex"] },
+      to: { type: "string", enum: cfg.allowedRecipients },
       text: { type: "string", minLength: 1, maxLength: MAX_TEXT - 100 },
       clientId: clientIdSchema,
       hop: { type: "integer", minimum: 0, description: "Incoming chain hop; output is hop + 1. Required; 0 only for a genuinely new message." },
@@ -34,7 +34,7 @@ export const TOOLS = [
   },
   {
     name: "grok_inbox",
-    description: "Read messages waiting for grok on the ccim channel without acknowledging them. By default returns messages addressed directly to grok that are not acked yet. Pass ids to read specific messages (for example the message_ids from a wake).",
+    description: `Read messages waiting for ${cfg.handle} on the ccim channel without acknowledging them. By default returns messages addressed directly to ${cfg.handle} that are not acked yet. Pass ids to read specific messages (for example the message_ids from a wake).`,
     inputSchema: object({
       ids: { ...idList, description: "Message ids to read." },
       include_skipped: { type: "boolean", description: "Also return broadcasts that did not wake you." },
@@ -44,7 +44,7 @@ export const TOOLS = [
   },
   {
     name: "grok_reply",
-    description: "Reply to the sender of one message grok received. A hop marker is added. Check structuredContent.outcome: sent includes a receipt id; rejected means refused; uncertain means it may already be delivered. For uncertain, do NOT resend or change part: use grok_status and confirm with the recipient. isError=false alone does not mean delivered.",
+    description: `Reply to the sender of one message ${cfg.handle} received. A hop marker is added. Check structuredContent.outcome: sent includes a receipt id; rejected means refused; uncertain means it may already be delivered. For uncertain, do NOT resend or change part: use grok_status and confirm with the recipient. isError=false alone does not mean delivered.`,
     inputSchema: object({
       reply_to_id: { type: "integer", minimum: 1, description: "Id of the message you are answering." },
       text: { type: "string", minLength: 1, maxLength: MAX_TEXT - 100 },
@@ -54,17 +54,24 @@ export const TOOLS = [
   },
   {
     name: "grok_ack",
-    description: "Mark messages as handled so they leave grok's queue on the relay. Only ack what you have actually handled.",
+    description: `Mark messages as handled so they leave ${cfg.handle}'s queue on the relay. Only ack what you have actually handled.`,
     inputSchema: object({ ids: idList }, ["ids"]),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "grok_status",
     description: "Per-message stage (recorded 送达 / woken 已唤醒 / acked 已处理 / replied 已回复) plus wake counters and the last poll result.",
-    inputSchema: object({ ids: { ...idList, description: "Message ids; omit for the most recent ones." }, clientId: clientIdSchema }),
+    inputSchema: object({
+      ids: { ...idList, description: "Message ids; omit for the most recent ones." }, clientId: clientIdSchema,
+      health: { type: "boolean", const: true, description: "Read configured binding and check downstream identity with GET who (direct only); a latched auth stop is reported without retry or reset." },
+      probe_identity: { type: "boolean", const: true, description: "With health:true only: make one live GET who using this Worker's configured credential, even while blocked. Never changes the stop, reads a queue, or resumes work." },
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ];
+
+// Preserve the default catalog export for existing consumers; requests use toolsFor(ctx.cfg).
+export const TOOLS = toolsFor(config());
 
 export async function handleMcp(req, ctx) {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
@@ -90,14 +97,21 @@ async function dispatch({ id, method, params }, ctx) {
     case "ping":
       return result(id, {});
     case "tools/list":
-      return result(id, { tools: TOOLS });
+      return result(id, { tools: toolsFor(ctx.cfg) });
     case "tools/call": {
-      const tool = TOOLS.find((t) => t.name === params?.name);
+      const tool = toolsFor(ctx.cfg).find((t) => t.name === params?.name);
       if (!tool) return error(id, -32602, `unknown tool: ${params?.name}`);
       const args = params.arguments ?? {};
       if (!args || typeof args !== "object" || Array.isArray(args)) return result(id, toolError("arguments must be an object", tool.name === "grok_send" ? { outcome: "rejected", relay_id: null, retry_allowed: false } : undefined));
       const extra = Object.keys(args).filter((k) => !(k in tool.inputSchema.properties));
       if (extra.length) return result(id, toolError(`unexpected argument(s): ${extra.join(", ")}`, tool.name === "grok_send" ? { outcome: "rejected", relay_id: null, retry_allowed: false } : undefined));
+      if (tool.name !== "grok_status") {
+        const ids = tool.name === "grok_reply" ? [args.reply_to_id] : tool.name === "grok_ack" || tool.name === "grok_inbox" ? (Array.isArray(args.ids) ? args.ids : []) : args.source_message_id === undefined ? [] : [args.source_message_id];
+        const denied = await ctx.backlog.rejection(ids);
+        if (denied) return result(id, toolError(denied, { error: denied, retry_allowed: false }));
+        if (tool.name === "grok_send" && (await ctx.backlog.status()).active && args.source_message_id === undefined && (args.hop > 0 || parseHop(typeof args.text === "string" ? args.text : "").hop > 0))
+          return result(id, toolError("source_message_id required for a continuation while backlog is isolated"));
+      }
       const out = await HANDLERS[tool.name](args, ctx);
       ctx.log("mcp_tool", { tool: tool.name, ok: !out.isError, outcome: out.structuredContent?.outcome });
       return result(id, out);
@@ -130,7 +144,7 @@ async function view(meta, ctx) {
 const HANDLERS = {
   async grok_send(args, ctx) {
     const reject = (reason) => toolError(reason, { outcome: "rejected", relay_id: null, reason, retry_allowed: false });
-    if (!["claude", "neo-codex"].includes(args.to)) return reject("recipient_not_allowed");
+    if (!ctx.cfg.allowedRecipients.includes(args.to)) return reject("recipient_not_allowed");
     if (!validClientId(args.clientId)) return reject("invalid_client_id");
     if (typeof args.text !== "string" || !args.text.trim()) return reject("empty_text");
     if (!Number.isSafeInteger(args.hop) || args.hop < 0) return reject("invalid_hop");
@@ -149,7 +163,7 @@ const HANDLERS = {
     }
     const hop = incomingHop + 1;
     if (!Number.isSafeInteger(hop)) return reject("invalid_hop");
-    const tag = args.source_message_id === undefined ? `[ccim-auto from=grok hop=${hop}]` : autoTag("grok", hop, args.source_message_id);
+    const tag = args.source_message_id === undefined ? `[ccim-auto from=${ctx.cfg.handle} hop=${hop}]` : autoTag(ctx.cfg.handle, hop, args.source_message_id);
     const text = `${args.text.trimEnd()}\n\n${tag}`;
     if (text.length > MAX_TEXT) return reject("text_too_long");
     return sendResult(await sendProactive(ctx, { to: args.to, text, hop, clientId: args.clientId }));
@@ -160,7 +174,7 @@ const HANDLERS = {
     const limit = args.limit ?? 50;
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) return toolError("limit must be an integer from 1 to 200");
     const peek = await ctx.relay.peek();
-    if (!peek.ok) return toolError(`Could not read the relay (${peek.error}). Try again later.`, { status: peek.status });
+    if (!peek.ok) return toolError("Could not read the relay. Check grok_status health; do not rejoin or change task ids.", { status: peek.status, retry_allowed: false });
     await ingest(ctx, peek.messages); // a message that arrived after the last tick becomes replyable right away
     const wanted = args.ids ? new Set(args.ids) : null;
     const rows = [];
@@ -173,7 +187,7 @@ const HANDLERS = {
       if (rows.length >= limit) break;
     }
     const missing = wanted ? [...wanted].filter((i) => !rows.some((r) => r.id === i)) : [];
-    if (!rows.length) return ok(missing.length ? `Not in the current relay queue: ${missing.join(", ")}. A message may have been acknowledged or belong to a previous relay. This does not prove it was never received. Preserve completed work and check with the operator before rerunning a task.` : "No unacknowledged messages for grok.", { messages: [], missing });
+    if (!rows.length) return ok(missing.length ? `Not in the current relay queue: ${missing.join(", ")}. A message may have been acknowledged or belong to a previous relay. This does not prove it was never received. Preserve completed work and check with the operator before rerunning a task.` : `No unacknowledged messages for ${ctx.cfg.handle}.`, { messages: [], missing });
     const lines = rows.map((r) => `--- #${r.id} from ${r.from}${r.to === "*" ? " (to everyone)" : ""} [${r.class}, hop ${r.hop}, ${r.stage_cn}]\n${r.text}`);
     lines.push("", UNTRUSTED, `Reply with grok_reply(reply_to_id), then grok_ack the ids you handled.${missing.length ? ` Not in the queue: ${missing.join(", ")}.` : ""}`);
     return ok(lines.join("\n"), { messages: rows, missing });
@@ -220,6 +234,16 @@ const HANDLERS = {
   },
 
   async grok_status(args, ctx) {
+    if (args.health !== undefined) {
+      if (args.health !== true || Object.keys(args).some(k => !["health", "probe_identity"].includes(k)) ||
+          (args.probe_identity !== undefined && args.probe_identity !== true)) return toolError("Use health:true alone or with probe_identity:true.");
+      const downstream = await (args.probe_identity ? ctx.relay.probeIdentity() : ctx.relay.identity());
+      const s = await summary(ctx);
+      return ok("Entry authentication and downstream identity are independent; this check never resumes a blocked worker.", { summary: s,
+        ...(args.probe_identity && { probe: { source: "worker_bound_identity", checked_at: ctx.now() } }),
+        downstream: { ok: downstream.ok, status: downstream.status, reason: downstream.ok ? "identity_verified" : downstream.error } });
+    }
+    if (args.probe_identity !== undefined) return toolError("probe_identity requires health:true.");
     if (args.clientId !== undefined) {
       if (!validClientId(args.clientId)) return toolError("invalid_client_id");
       if (args.ids !== undefined) return toolError("Use either clientId or ids.");

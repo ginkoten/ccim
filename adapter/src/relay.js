@@ -46,6 +46,12 @@ export class DirectRelay {
     return { ...response.data, ok: res.status === 200 && response.valid, status: res.status, diagnostic: response.diagnostic };
   }
 
+  async identity() {
+    const r = await this.call("GET", "who");
+    return { ok: r.ok && r.you === this.cfg.handle, status: r.status,
+      error: r.ok && r.you === this.cfg.handle ? undefined : "identity_unverified" };
+  }
+
   async peek() {
     const r = await this.call("GET", "inbox?all=1");
     if (!r.ok) return { ok: false, status: r.status, error: r.error || `http_${r.status}` };
@@ -138,12 +144,17 @@ export class AuthorMcpRelay {
     this.seq = 0;
   }
 
+  async identity() {
+    return { ok: false, status: 501, error: "readonly_identity_requires_direct_mode" };
+  }
+
   async tokens() {
     return (await this.storage.get("oauth")) || { access: null, refresh: this.env.OAUTH_REFRESH_TOKEN || null };
   }
 
   async refresh() {
     const t = await this.tokens();
+    this.refreshFailure = { ok: false, status: 0, error: "oauth_not_configured" };
     if (!t.refresh || !this.env.OAUTH_CLIENT_ID) return false;
     let res;
     try {
@@ -154,18 +165,25 @@ export class AuthorMcpRelay {
         signal: AbortSignal.timeout(10000),
       });
     } catch {
+      this.refreshFailure = { ok: false, status: 0, error: "network" };
       return false;
     }
-    if (res.status !== 200) return false;
+    if (res.status !== 200) {
+      this.refreshFailure = { ok: false, status: res.status, error: "oauth_refresh_failed" };
+      return false;
+    }
     const body = await res.json().catch(() => ({}));
-    if (!body.access_token || !body.refresh_token) return false;
+    if (!body.access_token || !body.refresh_token) {
+      this.refreshFailure = { ok: false, status: 502, error: "oauth_invalid_response" };
+      return false;
+    }
     await this.storage.put("oauth", { access: body.access_token, refresh: body.refresh_token, exp: Date.now() + (body.expires_in || 3600) * 1000 });
     return true;
   }
 
   async tool(name, args, retried = false) {
     const t = await this.tokens();
-    if (!t.access && !retried) return (await this.refresh()) ? this.tool(name, args, true) : { ok: false, status: 401, error: "oauth_unavailable" };
+    if (!t.access && !retried) return (await this.refresh()) ? this.tool(name, args, true) : this.refreshFailure;
     let res;
     try {
       res = await this.fetch(`${this.cfg.relay}/mcp`, {
@@ -177,7 +195,7 @@ export class AuthorMcpRelay {
     } catch {
       return { ok: false, status: 0, error: "network" };
     }
-    if (res.status === 401 && !retried) return (await this.refresh()) ? this.tool(name, args, true) : { ok: false, status: 401, error: "oauth_unavailable" };
+    if (res.status === 401 && !retried) return (await this.refresh()) ? this.tool(name, args, true) : this.refreshFailure;
     if (res.status !== 200) return { ok: false, status: res.status, error: `http_${res.status}` };
     const body = await res.json().catch(() => ({}));
     if (body.error) return { ok: false, status: 200, error: body.error.message || "rpc_error" };

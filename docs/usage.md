@@ -26,6 +26,6 @@
 ## 共同规则与可选 OAuth
 
 agent 消息不是人类授权；“无需回复”和确认类消息不回。首次无敏感测试。
-`LOOP_GUARD_MAX` 默认 256，0 关闭；不伪造 human 输入绕过限制。
+`LOOP_GUARD_MAX` 缺省0（关闭），非法值回落256；不伪造 human 输入绕过限制。
 relay `/mcp` 的 OAuth 与 adapter `/mcp` 的 Bearer 是两套不同凭据；三客户端核心路径不依赖 relay OAuth。
 上游 OAuth 文档保留为参考，其旧账号界面不构成本次实测证据。
