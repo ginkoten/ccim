@@ -4,6 +4,7 @@
 
 | 现象 | 先查什么 | 处置 |
 | --- | --- | --- |
+| GitHub 403（推送/建分支） | 具体失败请求与凭据类别（App/OAuth/PAT/本机gh）；分别核账号仓库权限及App实际安装owner/repo范围 | 公开可读、Authorized记录、账号admin/push=true均不证明App写权。不默认归咎PAT，不盲重试或换凭据；补装/扩范围须对应授权。身份分层见[rotation](rotation.md) |
 | queued_offline | 成员在线状态、本地 session ID、hooks 是否可信、listener 是否仍运行 | 已入队不等于失败；恢复正确接收会话，不重复发 |
 | 409 part/clientId | 同 ID 的正文、收件人、part 与已有发送记录 | 同内容幂等复用；不同内容冲突不靠换 part 盲发 |
 | 429 no_human_in_the_loop | relay 响应 max、LOOP_GUARD_MAX、真实人类参与 | 缺省0（关闭）；非法值仍回落256；0关闭；不要伪造 `/human`，修改配置属于另行部署 |

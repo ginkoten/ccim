@@ -1,5 +1,9 @@
 # 重建 Ginko-Bridge
 
+Claude任何join之前，先在正式插件界面核对市场来源为ginkoten/ccim、版本≥0.6.0，并检查该实际安装CLI的usage列出--if-absent/--must-exist/--secret-file。来源或能力不满足立即停止，禁止join。web3nomad/ccim 0.5.0换到ginkoten是更换市场来源，不是普通升级；换装后新缓存必须重新添加四条hooks的NODE_USE_ENV_PROXY=1前缀，再核监听子进程确实继承获准代理（只核变量是否存在，不打印值）。
+正式Claude接收位置为「内容工作站」项目的「Ginko-Bridge Claude 接收」。已有身份无需重新join；在该应用接收线程用标准ccim hook start恢复本session监听可免应用重启，但换装是否需应用重载由实际产品提示决定。人工兜底是在该接收线程发一句话唤起，见wake-claude.md。锁屏/睡眠可能暂停网络或hooks，解锁后核监听和原队列，不补发；此场景未实测。
+10月21日hooks备份文件名及改前SHA尚未找到可核实证据，不编造；10月27日只读当前hooks SHA见独立换装方案，不能冒充历史改前后证据。
+
 ## 新电脑先分清首次安装与接替
 
 本页是主入口，配合 [应用接收端](project-receivers.md) 使用应用内专用对话与 `~/.ccim/sessions` 的既有发现链接，不以终端接收器作为主路线。
